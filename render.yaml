@@ -1,0 +1,15 @@
+# Render Blueprint — Trading Dashboard (Streamlit)
+# Deploy: https://dashboard.render.com/blueprint/new?repo=<YOUR_REPO_URL>
+
+services:
+  - type: web
+    name: trading-dashboard
+    runtime: python
+    plan: free
+
+    buildCommand: pip install -r requirements.txt
+    startCommand: streamlit run app.py --server.port $PORT --server.address 0.0.0.0
+
+    envVars:
+      - key: MONGO_URI
+        sync: false  # Set in Render Dashboard: your MongoDB Atlas connection string
