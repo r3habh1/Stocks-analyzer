@@ -27,7 +27,7 @@ def _float(val: str | None) -> float:
     if not val:
         return 0.0
     try:
-        return float(val.strip().replace(",", ""))
+        return float(str(val).strip().replace(",", ""))
     except ValueError:
         return 0.0
 

@@ -68,12 +68,19 @@ sel_sym = st.selectbox("Select Stock", symbols, index=default_idx)
 @st.cache_data(ttl=300)
 def _load_stock_history(sym, date_list):
     rows = []
-    for d in date_list:
+    for i, d in enumerate(date_list):
         s = loader.get_stock(sym, d)
         if s:
             s["score"] = scorer.base_score(s)
             cv = scorer.outrunner_conviction(s)
             s["conviction"] = cv["conviction"]
+            # Compute call/put OI change % from previous day
+            if i > 0:
+                prev = loader.get_stock(sym, date_list[i - 1])
+                s = signals.enrich_oi_change_pct(s, prev)
+            else:
+                s["call_oi_change_pct"] = None
+                s["put_oi_change_pct"] = None
             rows.append(s)
     return rows
 
@@ -86,7 +93,9 @@ hdf = pd.DataFrame(hist)
 latest = hdf.iloc[-1]
 
 # ── Header ──────────────────────────────────────────────────
-st.subheader(f"{sel_sym} — {latest.get('stock_name', '')}")
+view_date = latest.get("date", dates[-1] if dates else "")
+mcap = latest.get("mcap_category", "")
+st.subheader(f"{sel_sym} — {latest.get('stock_name', '')} | {mcap} | {view_date}")
 
 conv = scorer.outrunner_conviction(latest.to_dict())
 
@@ -100,24 +109,21 @@ m5.metric("PCR", f"{latest.get('pcr',0):.2f}",
 m6.metric("Volume", f"{latest.get('volume_times',0):.2f}x")
 m7.metric("Delivery", f"{latest.get('delivery_times',0):.2f}x")
 
-st.caption(f"OI Trend: `{latest.get('oi_trend','')}` | "
-           f"Sector: {latest.get('sector','')} | "
-           f"MCap: {latest.get('mcap_category','')}")
+st.caption(f"OI Trend: `{latest.get('oi_trend','')}` | Sector: {latest.get('sector','')}")
 
 st.divider()
 
-# ── Row 1: Price + Score ────────────────────────────────────
+# 1. Close Price
+fig = go.Figure()
+fig.add_trace(go.Scatter(x=hdf["date"], y=hdf["close"], name="Close",
+                          line=dict(color="#6366f1", width=2)))
+fig.update_layout(title=f"{sel_sym} — Close Price", height=280,
+                  margin=dict(t=35, b=10, l=40, r=10))
+st.plotly_chart(fig, use_container_width=True)
+
+# 2. Score Over Time : 3. Conviction Over Time
 r1, r2 = st.columns(2)
-
 with r1:
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=hdf["date"], y=hdf["close"], name="Close",
-                              line=dict(color="#6366f1", width=2)))
-    fig.update_layout(title=f"{sel_sym} — Close Price", height=280,
-                      margin=dict(t=35, b=10, l=40, r=10))
-    st.plotly_chart(fig, width="stretch")
-
-with r2:
     colors = ["#22c55e" if v >= 20 else "#94a3b8" for v in hdf["score"]]
     fig = go.Figure(go.Bar(x=hdf["date"], y=hdf["score"],
                             marker_color=colors, name="Score"))
@@ -127,10 +133,7 @@ with r2:
                       margin=dict(t=35, b=10, l=40, r=10))
     st.plotly_chart(fig, width="stretch")
 
-# ── Row 2: Conviction + OI Change ───────────────────────────
-r3, r4 = st.columns(2)
-
-with r3:
+with r2:
     cv_colors = ["#22c55e" if v >= 12 else "#eab308" if v >= 8 else "#94a3b8"
                  for v in hdf["conviction"]]
     fig = go.Figure(go.Bar(x=hdf["date"], y=hdf["conviction"],
@@ -138,6 +141,20 @@ with r3:
     fig.update_layout(title=f"{sel_sym} — Conviction Over Time", height=280,
                       margin=dict(t=35, b=10, l=40, r=10),
                       yaxis_range=[0, 19])
+    st.plotly_chart(fig, width="stretch")
+
+# 4. PCR : 5. OI Change %
+r3, r4 = st.columns(2)
+with r3:
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=hdf["date"], y=hdf["pcr"], name="PCR",
+                              line=dict(color="#f59e0b", width=2)))
+    fig.add_hline(y=1.0, line_dash="dash", line_color="red",
+                  annotation_text="PCR=1.0")
+    fig.add_hline(y=0.5, line_dash="dot", line_color="green",
+                  annotation_text="Extreme Low")
+    fig.update_layout(title=f"{sel_sym} — PCR", height=280,
+                      margin=dict(t=35, b=10, l=40, r=10))
     st.plotly_chart(fig, width="stretch")
 
 with r4:
@@ -148,64 +165,47 @@ with r4:
                       margin=dict(t=35, b=10, l=40, r=10))
     st.plotly_chart(fig, width="stretch")
 
-# ── Row 3: PCR + Volume ─────────────────────────────────────
-r5, r6 = st.columns(2)
-
-with r5:
+# 6. Call OI vs Put OI
+if "cumulative_call_oi" in hdf.columns or "cumulative_put_oi" in hdf.columns:
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=hdf["date"], y=hdf["pcr"], name="PCR",
-                              line=dict(color="#f59e0b", width=2)))
-    fig.add_hline(y=1.0, line_dash="dash", line_color="red",
-                  annotation_text="PCR=1.0")
-    fig.add_hline(y=0.5, line_dash="dot", line_color="green",
-                  annotation_text="Extreme Low")
-    fig.update_layout(title=f"{sel_sym} — PCR Trend", height=260,
-                      margin=dict(t=35, b=10, l=40, r=10))
-    st.plotly_chart(fig, width="stretch")
+    if "cumulative_call_oi" in hdf.columns:
+        fig.add_trace(go.Scatter(
+            x=hdf["date"], y=hdf["cumulative_call_oi"], name="Call OI",
+            line=dict(color="#ef4444", width=2)))
+    if "cumulative_put_oi" in hdf.columns:
+        fig.add_trace(go.Scatter(
+            x=hdf["date"], y=hdf["cumulative_put_oi"], name="Put OI",
+            line=dict(color="#22c55e", width=2)))
+    fig.update_layout(title=f"{sel_sym} — Call OI vs Put OI", height=280,
+                      margin=dict(t=35, b=10, l=40, r=10),
+                      legend=dict(orientation="h", y=1.02))
+    st.plotly_chart(fig, use_container_width=True)
+else:
+    st.caption("Call/Put OI data not available.")
 
-with r6:
+# 7. Volume : 8. Delivery
+r5, r6 = st.columns(2)
+with r5:
     fig = go.Figure()
     fig.add_trace(go.Bar(x=hdf["date"], y=hdf["volume_times"], name="Volume(x)",
                           marker_color="#6366f1"))
     fig.add_hline(y=1.5, line_dash="dash", line_color="#22c55e",
                   annotation_text="1.5x threshold")
-    fig.update_layout(title=f"{sel_sym} — Volume Multiplier", height=260,
+    fig.update_layout(title=f"{sel_sym} — Volume", height=260,
                       margin=dict(t=35, b=10, l=40, r=10))
     st.plotly_chart(fig, width="stretch")
 
-# ── Row 4: Call OI vs Put OI + Delivery ───────────────────────
-r7, r8 = st.columns(2)
-
-with r7:
-    # Call OI (red) and Put OI (green) in same chart
-    if "cumulative_call_oi" in hdf.columns or "cumulative_put_oi" in hdf.columns:
-        fig = go.Figure()
-        if "cumulative_call_oi" in hdf.columns:
-            fig.add_trace(go.Scatter(
-                x=hdf["date"], y=hdf["cumulative_call_oi"], name="Call OI",
-                line=dict(color="#ef4444", width=2)))
-        if "cumulative_put_oi" in hdf.columns:
-            fig.add_trace(go.Scatter(
-                x=hdf["date"], y=hdf["cumulative_put_oi"], name="Put OI",
-                line=dict(color="#22c55e", width=2)))
-        fig.update_layout(title=f"{sel_sym} — Call OI vs Put OI", height=260,
-                          margin=dict(t=35, b=10, l=40, r=10),
-                          legend=dict(orientation="h", y=1.02))
-        st.plotly_chart(fig, width="stretch")
-    else:
-        st.caption("Call/Put OI data not available.")
-
-with r8:
+with r6:
     fig = go.Figure()
     fig.add_trace(go.Bar(x=hdf["date"], y=hdf["delivery_times"], name="Delivery(x)",
                           marker_color="#06b6d4"))
     fig.add_hline(y=2.0, line_dash="dash", line_color="#22c55e",
                   annotation_text="2.0x spike level")
-    fig.update_layout(title=f"{sel_sym} — Delivery Multiplier", height=260,
+    fig.update_layout(title=f"{sel_sym} — Delivery", height=260,
                       margin=dict(t=35, b=10, l=40, r=10))
     st.plotly_chart(fig, width="stretch")
 
-# ── Row 5: OI Trend Timeline ──────────────────────────────────
+# 9. OI Trend Timeline
 with st.container():
     trend_color_map = {
         "NewLong": "#22c55e", "ShortCover": "#06b6d4",
@@ -244,5 +244,9 @@ with st.expander("📋 Full Historical Data"):
         show_cols.append("cumulative_call_oi")
     if "cumulative_put_oi" in hdf.columns:
         show_cols.append("cumulative_put_oi")
+    if "call_oi_change_pct" in hdf.columns:
+        show_cols.append("call_oi_change_pct")
+    if "put_oi_change_pct" in hdf.columns:
+        show_cols.append("put_oi_change_pct")
     st.dataframe(hdf[[c for c in show_cols if c in hdf.columns]].sort_values("date", ascending=False),
                  width="stretch", height=400)

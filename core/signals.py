@@ -9,6 +9,31 @@ from core.scorer import base_score, outrunner_conviction, BULLISH
 
 BEARISH_TRENDS = {"NewShort", "LongCover"}
 
+
+def _pct_chg(curr: float, prev: float) -> float | None:
+    """Return (curr - prev) / prev * 100 if prev > 0, else None."""
+    if prev is None or prev == 0:
+        return None
+    curr = curr or 0
+    return round((curr - prev) / prev * 100, 2)
+
+
+def enrich_oi_change_pct(stock: dict, prev_stock: dict | None) -> dict:
+    """Add call_oi_change_pct and put_oi_change_pct computed from cumulative OI (today vs yesterday)."""
+    s = dict(stock)
+    if prev_stock:
+        prev_call = prev_stock.get("cumulative_call_oi") or 0
+        prev_put = prev_stock.get("cumulative_put_oi") or 0
+        curr_call = s.get("cumulative_call_oi") or 0
+        curr_put = s.get("cumulative_put_oi") or 0
+        s["call_oi_change_pct"] = _pct_chg(curr_call, prev_call)
+        s["put_oi_change_pct"] = _pct_chg(curr_put, prev_put)
+    else:
+        s["call_oi_change_pct"] = None
+        s["put_oi_change_pct"] = None
+    return s
+
+
 def detect_trend_flips(data: dict, dates: list[str]) -> list[dict]:
     """Find stocks whose OI trend flipped from bearish→bullish today."""
     if len(dates) < 2:
@@ -63,7 +88,7 @@ def sector_rotation(data: dict, dates: list[str], window: int = 5,
         by_sec = defaultdict(lambda: {
             "count": 0, "bull": 0,
             "chg_sum": 0, "pcr_sum": 0, "vol_sum": 0, "dlv_sum": 0,
-            "oi_chg_sum": 0,
+            "oi_chg_sum": 0, "call_oi_sum": 0, "put_oi_sum": 0,
         })
         for s in stocks:
             sec = s.get("sector", "?")
@@ -76,6 +101,8 @@ def sector_rotation(data: dict, dates: list[str], window: int = 5,
             d["vol_sum"] += s.get("volume_times", 0)
             d["dlv_sum"] += s.get("delivery_times", 0)
             d["oi_chg_sum"] += s.get("oi_change_pct", 0)
+            d["call_oi_sum"] += s.get("cumulative_call_oi") or 0
+            d["put_oi_sum"] += s.get("cumulative_put_oi") or 0
         result = {}
         for sec, d in by_sec.items():
             n = d["count"]
@@ -89,23 +116,38 @@ def sector_rotation(data: dict, dates: list[str], window: int = 5,
                 "avg_vol": round(d["vol_sum"] / n, 2),
                 "avg_dlv": round(d["dlv_sum"] / n, 2),
                 "avg_oi_chg": round(d["oi_chg_sum"] / n, 2),
+                "call_oi_sum": d["call_oi_sum"],
+                "put_oi_sum": d["put_oi_sum"],
             }
         return result
 
     now_stocks = _filter(dates[-1])
+    prev_date = dates[-2] if len(dates) >= 2 else None
+    prev_data = data.get(prev_date, {}) if prev_date else {}
+
     stats_now = _sector_stats(now_stocks)
-    # Group stocks by sector for drill-down
+    # Group stocks by sector for drill-down; enrich with computed call/put OI change %
     sector_stocks: dict[str, list[dict]] = defaultdict(list)
     for s in now_stocks:
+        prev_s = prev_data.get(s.get("symbol", ""))
+        s_enriched = enrich_oi_change_pct(s, prev_s)
         sec = s.get("sector", "?")
         sector_stocks[sec].append({
-            "symbol": s.get("symbol", ""),
-            "change_pct": s.get("change_pct", 0),
-            "oi_trend": s.get("oi_trend", ""),
-            "pcr": s.get("pcr", 0),
-            "volume_times": s.get("volume_times", 0),
-            "delivery_times": s.get("delivery_times", 0),
-            "score": base_score(s),
+            "symbol": s_enriched.get("symbol", ""),
+            "change_pct": s_enriched.get("change_pct", 0),
+            "oi_trend": s_enriched.get("oi_trend", ""),
+            "pcr": s_enriched.get("pcr", 0),
+            "volume_times": s_enriched.get("volume_times", 0),
+            "delivery_times": s_enriched.get("delivery_times", 0),
+            "score": base_score(s_enriched),
+            "cumulative_call_oi": s_enriched.get("cumulative_call_oi"),
+            "cumulative_put_oi": s_enriched.get("cumulative_put_oi"),
+            "cumulative_future_oi": s_enriched.get("cumulative_future_oi"),
+            "oi_change_pct": s_enriched.get("oi_change_pct", 0),
+            "call_oi_change_pct": s_enriched.get("call_oi_change_pct"),
+            "put_oi_change_pct": s_enriched.get("put_oi_change_pct"),
+            "pcr_change_1d": s_enriched.get("pcr_change_1d", 0),
+            "mcap_category": s_enriched.get("mcap_category", ""),
         })
 
     if window > 0:
@@ -115,29 +157,43 @@ def sector_rotation(data: dict, dates: list[str], window: int = 5,
     else:
         stats_past = {}
 
+    # For Agg Call/Put OI Chg%: always use previous day when available (even when window=0)
+    stats_prev_day = {}
+    if len(dates) >= 2:
+        prev_day_stocks = _filter(dates[-2])
+        stats_prev_day = _sector_stats(prev_day_stocks)
+
     rotations = []
     for sec, now in stats_now.items():
         past = stats_past.get(sec, {})
+        prev = stats_prev_day.get(sec, past)  # use prev day for OI chg when available
         bull_delta = now["bull_pct"] - past.get("bull_pct", now["bull_pct"])
         pcr_delta = now["avg_pcr"] - past.get("avg_pcr", now["avg_pcr"])
         chg_delta = now["avg_chg"] - past.get("avg_chg", 0)
 
-        oi_chg_delta = now["avg_oi_chg"] - past.get("avg_oi_chg", 0)
+        now_call = now.get("call_oi_sum") or 0
+        now_put = now.get("put_oi_sum") or 0
+        past_call = prev.get("call_oi_sum") or 0
+        past_put = prev.get("put_oi_sum") or 0
+        agg_call_chg = _pct_chg(now_call, past_call) if past_call else None
+        agg_put_chg = _pct_chg(now_put, past_put) if past_put else None
 
         rotations.append({
             "Sector": sec,
             "Stocks": now["count"],
             "stocks_list": sector_stocks.get(sec, []),
-            "Avg OI Chg%": now["avg_oi_chg"],
-            "OI Δ": round(oi_chg_delta, 2),
+            "Agg Chg %": round(now["avg_chg"], 2),
+            "Chg Δ": round(chg_delta, 2),
             "Bull%": now["bull_pct"],
             "Bull Δ": round(bull_delta, 1),
-            "Avg Chg%": now["avg_chg"],
-            "Chg Δ": round(chg_delta, 2),
-            "Avg PCR": now["avg_pcr"],
+            "Vol(x)": round(now["avg_vol"], 2),
+            "Dlv(x)": round(now["avg_dlv"], 2),
+            "PCR": round(now["avg_pcr"], 2),
             "PCR Δ": round(pcr_delta, 2),
-            "Avg Vol(x)": now["avg_vol"],
-            "Avg Dlv(x)": now["avg_dlv"],
+            "Agg Call OI": int(now_call),
+            "Agg Call OI Chg%": agg_call_chg,
+            "Agg Put OI": int(now_put),
+            "Agg Put OI Chg%": agg_put_chg,
             "Direction": "Improving" if bull_delta > 10 else
                          "Declining" if bull_delta < -10 else "Stable",
         })

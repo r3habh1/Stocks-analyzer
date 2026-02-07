@@ -177,6 +177,33 @@ if not dist_rows:
 
 df = pd.DataFrame(dist_rows)
 
+# ── Bullish / Bearish Time Series (MCap filtered) — above Sector Rotation ───
+st.subheader(f"Bullish vs Bearish Over Time — {mcap_filter} | {view_date}")
+
+ts_rows = []
+for dt in dates_up_to_view:
+    stocks = list(sig_data.get(dt, {}).values())
+    if mcap_filter != "All":
+        stocks = [s for s in stocks if s.get("mcap_category") == mcap_filter]
+    n_bull = sum(1 for s in stocks if s.get("oi_trend", "") in bullish_trends)
+    n_bear = sum(1 for s in stocks if s.get("oi_trend", "") in bearish_trends)
+    ts_rows.append({"date": dt, "Bullish": n_bull, "Bearish": n_bear})
+
+if ts_rows:
+    tsdf = pd.DataFrame(ts_rows)
+    fig_ts = go.Figure()
+    fig_ts.add_trace(go.Scatter(x=tsdf["date"], y=tsdf["Bullish"], name="Bullish",
+                                line=dict(color="#22c55e"), mode="lines+markers"))
+    fig_ts.add_trace(go.Scatter(x=tsdf["date"], y=tsdf["Bearish"], name="Bearish",
+                                line=dict(color="#ef4444"), mode="lines+markers"))
+    fig_ts.update_layout(height=320, margin=dict(t=30, b=40), legend=dict(orientation="h"),
+                         xaxis_title="Date", yaxis_title="Count")
+    st.plotly_chart(fig_ts, use_container_width=True)
+else:
+    st.caption("No time series data for this filter.")
+
+st.divider()
+
 # ── Sector Rotation ──────────────────────────────────────────
 st.subheader(f"Sector Rotation — {time_range} | {mcap_filter}")
 st.caption("Click a sector row to see its stocks (same page)")
@@ -188,17 +215,30 @@ if rot:
     rdf = pd.DataFrame(rot_display)
 
     # Sector rotation table — click a row to see its stocks (same page)
+    fmt_map = {"Agg Chg %": "{:+.2f}", "Chg Δ": "{:+.2f}", "Bull%": "{:.1f}", "Bull Δ": "{:+.1f}",
+               "Vol(x)": "{:.2f}", "Dlv(x)": "{:.2f}", "PCR": "{:.2f}", "PCR Δ": "{:+.2f}",
+               "Agg Call OI": "{:,.0f}", "Agg Put OI": "{:,.0f}",
+               "Agg Call OI Chg%": "{:+.2f}", "Agg Put OI Chg%": "{:+.2f}"}
+    chg_cols = [c for c in rdf.columns if "Chg" in c or "Δ" in c]
     styled = (rdf.style
-              .format({
-                  "Avg OI Chg%": "{:+.2f}", "OI Δ": "{:+.2f}",
-                  "Bull%": "{:.1f}", "Bull Δ": "{:+.1f}", "Avg Chg%": "{:+.2f}",
-                  "Chg Δ": "{:+.2f}", "Avg PCR": "{:.2f}", "PCR Δ": "{:+.2f}",
-                  "Avg Vol(x)": "{:.2f}", "Avg Dlv(x)": "{:.2f}",
-              })
+              .format({k: v for k, v in fmt_map.items() if k in rdf.columns}, na_rep="—")
               .map(
-                  lambda v: "color: #22c55e" if isinstance(v, (int, float)) and v > 0
-                  else "color: #ef4444" if isinstance(v, (int, float)) and v < 0 else "",
-                  subset=["Bull Δ", "Chg Δ", "PCR Δ", "Avg OI Chg%", "OI Δ"]))
+                  lambda v: "color: #22c55e" if v is not None and isinstance(v, (int, float)) and v > 0
+                  else "color: #ef4444" if v is not None and isinstance(v, (int, float)) and v < 0 else "",
+                  subset=chg_cols))
+    # Highlight OI trend (Direction) — Improving=green, Declining=red
+    if "Direction" in rdf.columns:
+        def _dir_color(v):
+            if v == "Improving": return "background-color: rgba(34,197,94,0.25); font-weight: 600"
+            if v == "Declining": return "background-color: rgba(239,68,68,0.25); font-weight: 600"
+            return ""
+        styled = styled.map(lambda v: _dir_color(v) if isinstance(v, str) else "", subset=["Direction"])
+    # Highlight Vol(x) and Dlv(x) when above 1.5
+    for col in ["Vol(x)", "Dlv(x)"]:
+        if col in rdf.columns:
+            styled = styled.map(
+                lambda v: "background-color: rgba(34,197,94,0.3); font-weight: 600" if v is not None and isinstance(v, (int, float)) and v >= 1.5 else "",
+                subset=[col])
     event = st.dataframe(styled, width="stretch", hide_index=True, height=400,
                          on_select="rerun", selection_mode="single-row",
                          key=f"sector_rotation_df_{st.session_state.sector_df_key}")
@@ -219,17 +259,45 @@ if rot:
             rows = []
             for s in stocks_in_sector:
                 sym = s.get("symbol", "")
+                s_full = dict(s, symbol=sym)
+                conv = scorer.outrunner_conviction(s_full)["conviction"] if sym else 0
                 rows.append({
                     "Symbol": f"/Stock_Analysis?symbol={sym}",
+                    "Conv": conv,
                     "Score": s.get("score", 0),
-                    "Chg%": f"{s.get('change_pct', 0):+.1f}",
+                    "Chg%": s.get("change_pct"),
+                    "Vol(x)": s.get("volume_times", 0),
+                    "Dlv(x)": s.get("delivery_times", 0),
+                    "Fut OI": s.get("cumulative_future_oi"),
+                    "Fut OI Chg%": s.get("oi_change_pct"),
+                    "Call OI": s.get("cumulative_call_oi"),
+                    "Call OI Chg%": s.get("call_oi_change_pct"),
+                    "Put OI": s.get("cumulative_put_oi"),
+                    "Put OI Chg%": s.get("put_oi_change_pct"),
+                    "PCR": s.get("pcr", 0),
+                    "PCR Chg": s.get("pcr_change_1d"),
                     "OI Trend": s.get("oi_trend", ""),
-                    "PCR": f"{s.get('pcr', 0):.2f}",
-                    "Vol(x)": f"{s.get('volume_times', 0):.2f}",
-                    "Dlv(x)": f"{s.get('delivery_times', 0):.2f}",
+                    "MCap": s.get("mcap_category", ""),
                 })
             sdf = pd.DataFrame(rows)
-            st.dataframe(sdf, width="stretch", hide_index=True,
+            schg_cols = [c for c in sdf.columns if "Chg" in c]
+            sfmt = {c: "{:+.1f}" for c in ["Chg%", "Fut OI Chg%", "Call OI Chg%", "Put OI Chg%"] if c in sdf.columns}
+            sfmt.update({c: "{:+.2f}" for c in ["PCR Chg"] if c in sdf.columns})
+            sfmt.update({c: "{:.2f}" for c in ["Vol(x)", "Dlv(x)", "PCR"] if c in sdf.columns})
+            sfmt.update({c: "{:,.0f}" for c in ["Fut OI", "Call OI", "Put OI"] if c in sdf.columns})
+            _scolor = lambda s: ["color: #22c55e" if v is not None and isinstance(v, (int, float)) and v > 0
+                                 else "color: #ef4444" if v is not None and isinstance(v, (int, float)) and v < 0 else "" for v in s]
+            styled_s = sdf.style.format(sfmt, na_rep="—")
+            if schg_cols:
+                styled_s = styled_s.apply(_scolor, subset=schg_cols)
+            # Highlight OI Trend, Vol(x), Dlv(x) when above 1.5
+            if "OI Trend" in sdf.columns:
+                _oi_color = lambda v: "background-color: rgba(34,197,94,0.2)" if v in ("NewLong", "ShortCover") else "background-color: rgba(239,68,68,0.2)" if v in ("NewShort", "LongCover") else ""
+                styled_s = styled_s.map(lambda v: _oi_color(v) if isinstance(v, str) else "", subset=["OI Trend"])
+            for col in ["Vol(x)", "Dlv(x)"]:
+                if col in sdf.columns:
+                    styled_s = styled_s.map(lambda v: "background-color: rgba(34,197,94,0.3); font-weight: 600" if v is not None and isinstance(v, (int, float)) and v >= 1.5 else "", subset=[col])
+            st.dataframe(styled_s, width="stretch", hide_index=True,
                          column_config={"Symbol": st.column_config.LinkColumn(
                              "Symbol", display_text=r".*symbol=([^&]+)")})
         else:
@@ -250,8 +318,10 @@ if rot:
         st.plotly_chart(fig, width="stretch")
 
         with ch2:
-            fig2 = px.scatter(rdf, x="Avg Chg%", y="PCR Δ",
-                              size="Avg Vol(x)", color="Bull Δ",
+            chg_col = "Agg Chg %" if "Agg Chg %" in rdf.columns else "Avg Chg%"
+            vol_col = "Vol(x)" if "Vol(x)" in rdf.columns else "Avg Vol(x)"
+            fig2 = px.scatter(rdf, x=chg_col, y="PCR Δ",
+                              size=vol_col, color="Bull Δ",
                               hover_name="Sector", text="Sector",
                               color_continuous_scale=["#ef4444", "#94a3b8", "#22c55e"],
                               title="Sectors: Price Change vs PCR Change")
@@ -267,9 +337,9 @@ st.divider()
 _dist_label = f"{time_range} | {mcap_filter}" if window > 0 else mcap_filter
 st.subheader(f"Distributions — {_dist_label}")
 
-d1, d2, d3 = st.columns(3)
-
-with d1:
+# 1. OI Trend
+d1a, d1b = st.columns([1, 2])
+with d1a:
     trend_counts = df["oi_trend"].value_counts().reset_index()
     trend_counts.columns = ["OI Trend", "Count"]
     color_map = {
@@ -279,45 +349,94 @@ with d1:
     }
     fig = px.pie(trend_counts, names="OI Trend", values="Count",
                  color="OI Trend", color_discrete_map=color_map, hole=0.4,
-                 title="OI Trend")
+                 title="1. OI Trend")
     fig.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=280,
                       legend=dict(font=dict(size=9)))
     st.plotly_chart(fig, width="stretch")
 
+# 2. Price Change %
+d2, _ = st.columns([1, 2])
 with d2:
-    fig = px.histogram(df, x="pcr", nbins=20, title="PCR Distribution",
-                       color_discrete_sequence=["#f59e0b"])
-    fig.add_vline(x=0.5, line_dash="dot", line_color="#22c55e",
-                  annotation_text="Extreme Low")
-    fig.add_vline(x=1.0, line_dash="dash", line_color="#ef4444",
-                  annotation_text="PCR=1")
-    fig.update_layout(margin=dict(t=40, b=10, l=10), height=280)
-    st.plotly_chart(fig, width="stretch")
-
-with d3:
-    fig = px.histogram(df, x="change_pct", nbins=25, title="Price Change %",
+    fig = px.histogram(df, x="change_pct", nbins=25, title="2. Price Change %",
                        color_discrete_sequence=["#6366f1"])
     fig.add_vline(x=0, line_dash="dash", line_color="white")
     fig.update_layout(margin=dict(t=40, b=10, l=10), height=280)
     st.plotly_chart(fig, width="stretch")
 
-d4, d5 = st.columns(2)
-
-with d4:
-    fig = px.histogram(df, x="volume_times", nbins=20, title="Volume Multiplier",
-                       color_discrete_sequence=["#06b6d4"])
+# 3. Volume : 4. Delivery (highlight above 1.5)
+d3, d4 = st.columns(2)
+with d3:
+    vdf = df[["volume_times"]].copy()
+    vdf["above"] = vdf["volume_times"] >= 1.5
+    fig = px.histogram(vdf, x="volume_times", nbins=20, color="above",
+                       color_discrete_map={True: "#22c55e", False: "#06b6d4"},
+                       title="3. Volume Multiplier")
     fig.add_vline(x=1.5, line_dash="dash", line_color="#22c55e",
                   annotation_text="1.5x")
-    fig.update_layout(margin=dict(t=40, b=10, l=10), height=260)
+    fig.update_layout(margin=dict(t=40, b=10, l=10), height=260, showlegend=False)
     st.plotly_chart(fig, width="stretch")
 
-with d5:
-    fig = px.histogram(df, x="delivery_times", nbins=20, title="Delivery Multiplier",
-                       color_discrete_sequence=["#8b5cf6"])
-    fig.add_vline(x=2.0, line_dash="dash", line_color="#22c55e",
-                  annotation_text="2.0x spike")
-    fig.update_layout(margin=dict(t=40, b=10, l=10), height=260)
+with d4:
+    ddf = df[["delivery_times"]].copy()
+    ddf["above"] = ddf["delivery_times"] >= 1.5
+    fig = px.histogram(ddf, x="delivery_times", nbins=20, color="above",
+                       color_discrete_map={True: "#22c55e", False: "#8b5cf6"},
+                       title="4. Delivery Multiplier")
+    fig.add_vline(x=1.5, line_dash="dash", line_color="#22c55e",
+                  annotation_text="1.5x")
+    fig.update_layout(margin=dict(t=40, b=10, l=10), height=260, showlegend=False)
     st.plotly_chart(fig, width="stretch")
+
+# 5. Call OI Chg % and 6. Put OI Chg % (computed from view vs prev date)
+if len(dates_up_to_view) >= 2:
+    prev_d = dates_up_to_view[-2]
+    prev_stocks = {s["symbol"]: s for s in sig_data.get(prev_d, {}).values()}
+    view_stocks_flat = list(sig_data.get(view_date, {}).values())
+    if mcap_filter != "All":
+        view_stocks_flat = [s for s in view_stocks_flat if s.get("mcap_category") == mcap_filter]
+    call_chg_vals = []
+    put_chg_vals = []
+    for s in view_stocks_flat:
+        s_enriched = signals.enrich_oi_change_pct(s, prev_stocks.get(s.get("symbol")))
+        if s_enriched.get("call_oi_change_pct") is not None:
+            call_chg_vals.append(s_enriched["call_oi_change_pct"])
+        if s_enriched.get("put_oi_change_pct") is not None:
+            put_chg_vals.append(s_enriched["put_oi_change_pct"])
+    d9, d10 = st.columns(2)
+    with d9:
+        if call_chg_vals:
+            cdf = pd.DataFrame({"Call OI Chg %": call_chg_vals})
+            fig = px.histogram(cdf, x="Call OI Chg %", nbins=25,
+                               title="5. Call OI Change %", color_discrete_sequence=["#ef4444"])
+            fig.add_vline(x=0, line_dash="dash", line_color="white")
+            fig.update_layout(margin=dict(t=40, b=10, l=10), height=260)
+            st.plotly_chart(fig, width="stretch")
+    with d10:
+        if put_chg_vals:
+            pdf = pd.DataFrame({"Put OI Chg %": put_chg_vals})
+            fig = px.histogram(pdf, x="Put OI Chg %", nbins=25,
+                               title="6. Put OI Change %", color_discrete_sequence=["#22c55e"])
+            fig.add_vline(x=0, line_dash="dash", line_color="white")
+            fig.update_layout(margin=dict(t=40, b=10, l=10), height=260)
+            st.plotly_chart(fig, width="stretch")
+
+# 7. PCR (highlight above 1.5)
+if "pcr" in df.columns:
+    pdf = df[["pcr"]].dropna()
+    if not pdf.empty:
+        pdf = pdf.copy()
+        pdf["above"] = pdf["pcr"] >= 1.5
+        fig = px.histogram(pdf, x="pcr", nbins=25, color="above",
+                           color_discrete_map={True: "#22c55e", False: "#f59e0b"},
+                           title="7. PCR Distribution")
+        fig.add_vline(x=0.5, line_dash="dot", line_color="#22c55e",
+                      annotation_text="Extreme Low")
+        fig.add_vline(x=1.0, line_dash="dash", line_color="#ef4444",
+                      annotation_text="PCR=1")
+        fig.add_vline(x=1.5, line_dash="dash", line_color="#22c55e",
+                      annotation_text="High PCR")
+        fig.update_layout(margin=dict(t=40, b=10, l=10), height=260, showlegend=False)
+        st.plotly_chart(fig, width="stretch")
 
 st.divider()
 
@@ -385,58 +504,84 @@ with a4:
 
 st.divider()
 
-# ── Quick Picks (filtered by MCap, based on selected date) ────
-st.subheader(f"Quick Picks — {quick_picks_date}")
-st.caption("Click any stock symbol to view full analysis")
-q1, q2 = st.columns(2)
-
+# ── Quick Picks / Stock Action Sheet ───────────────────────────
 STOCK_URL = "/Stock_Analysis?symbol={}"
 
-with q1:
-    st.markdown("**Top 5 Options Picks** (outrunner conviction)")
-    opt_picks = []
-    for s in quick_picks_filtered:
-        sc = scorer.base_score(s)
-        if 20 <= sc <= 34:
-            conv = scorer.outrunner_conviction(s)
-            opt_picks.append({
-                "Symbol": STOCK_URL.format(s["symbol"]),
-                "Conv": conv["conviction"],
-                "Score": sc,
-                "Close": f"₹{s.get('close',0):,.0f}",
-                "Chg%": f"{s.get('change_pct',0):+.1f}",
-                "OI Trend": s.get("oi_trend", ""),
-                "MCap": s.get("mcap_category", ""),
-            })
-    opt_picks.sort(key=lambda x: x["Conv"], reverse=True)
-    if opt_picks:
-        odf = pd.DataFrame(opt_picks[:5])
-        st.dataframe(odf, width="stretch", hide_index=True,
-                     column_config={"Symbol": st.column_config.LinkColumn(
-                         "Symbol", display_text=r".*symbol=(.+)$")})
-    else:
-        st.caption("No picks")
+prev_date = dates_up_to_view[-2] if len(dates_up_to_view) >= 2 else None
+prev_sig = sig_data.get(prev_date, {}) if prev_date else {}
 
-with q2:
-    st.markdown("**Top 5 Swing Picks** (score ranked)")
-    sw_picks = []
-    for s in quick_picks_filtered:
-        sc = scorer.base_score(s)
-        if 20 <= sc <= 34:
-            sw_picks.append({
-                "Symbol": STOCK_URL.format(s["symbol"]),
-                "Score": sc,
-                "Close": f"₹{s.get('close',0):,.0f}",
-                "Chg%": f"{s.get('change_pct',0):+.1f}",
-                "OI Trend": s.get("oi_trend", ""),
-                "PCR": f"{s.get('pcr',0):.2f}",
-                "MCap": s.get("mcap_category", ""),
-            })
-    sw_picks.sort(key=lambda x: x["Score"], reverse=True)
-    if sw_picks:
-        sdf = pd.DataFrame(sw_picks[:5])
-        st.dataframe(sdf, width="stretch", hide_index=True,
-                     column_config={"Symbol": st.column_config.LinkColumn(
-                         "Symbol", display_text=r".*symbol=(.+)$")})
+# Build full stock list (all stocks) for "All" option
+all_stocks_list = []
+for s in quick_picks_filtered:
+    sc = scorer.base_score(s)
+    s_enriched = signals.enrich_oi_change_pct(s, prev_sig.get(s["symbol"]))
+    conv = scorer.outrunner_conviction(s_enriched)
+    combined = conv["conviction"] + sc
+    all_stocks_list.append({
+        "Symbol": STOCK_URL.format(s["symbol"]),
+        "Conv": conv["conviction"],
+        "Score": sc,
+        "Combined": combined,
+        "Chg%": s.get("change_pct"),
+        "Vol(x)": s.get("volume_times", 0),
+        "Dlv(x)": s.get("delivery_times", 0),
+        "Fut OI": s.get("cumulative_future_oi"),
+        "Fut OI Chg%": s.get("oi_change_pct"),
+        "Call OI": s.get("cumulative_call_oi"),
+        "Call OI Chg%": s_enriched.get("call_oi_change_pct"),
+        "Put OI": s.get("cumulative_put_oi"),
+        "Put OI Chg%": s_enriched.get("put_oi_change_pct"),
+        "PCR": s.get("pcr", 0),
+        "PCR Chg": s.get("pcr_change_1d"),
+        "OI Trend": s.get("oi_trend", ""),
+        "MCap": s.get("mcap_category", ""),
+    })
+all_stocks_list.sort(key=lambda x: x["Combined"], reverse=True)
+
+# Sweet spot picks (score 20–34) — top 10 for Quick Picks tab
+quick_picks_list = [r for r in all_stocks_list if 20 <= r["Score"] <= 34]
+quick_picks_display = quick_picks_list[:10]
+
+tab_qp, tab_sheet = st.tabs(["Quick Picks", "Stock Sheet"])
+
+def _render_table(display_list, height=400):
+    if not display_list:
+        return
+    qdf = pd.DataFrame(display_list)
+    display_cols = ["Symbol", "Conv", "Score", "Chg%", "Vol(x)", "Dlv(x)",
+                   "Fut OI", "Fut OI Chg%", "Call OI", "Call OI Chg%", "Put OI", "Put OI Chg%",
+                   "PCR", "PCR Chg", "OI Trend", "MCap"]
+    qdf_display = qdf[[c for c in display_cols if c in qdf.columns]]
+    chg_cols = [c for c in qdf_display.columns if "Chg" in c]
+    fmt_dict = {c: "{:+.1f}" for c in ["Chg%", "Fut OI Chg%", "Call OI Chg%", "Put OI Chg%"] if c in qdf_display.columns}
+    fmt_dict.update({c: "{:+.2f}" for c in ["PCR Chg"] if c in qdf_display.columns})
+    fmt_dict.update({c: "{:.2f}" for c in ["Vol(x)", "Dlv(x)", "PCR"] if c in qdf_display.columns})
+    fmt_dict.update({c: "{:,.0f}" for c in ["Fut OI", "Call OI", "Put OI"] if c in qdf_display.columns})
+    _color_chg = lambda s: ["color: #22c55e" if v is not None and isinstance(v, (int, float)) and v > 0
+                           else "color: #ef4444" if v is not None and isinstance(v, (int, float)) and v < 0 else "" for v in s]
+    styled_q = qdf_display.style.format(fmt_dict, na_rep="—")
+    if chg_cols:
+        styled_q = styled_q.apply(_color_chg, subset=chg_cols)
+    if "OI Trend" in qdf_display.columns:
+        _oi_color = lambda v: "background-color: rgba(34,197,94,0.2)" if v in ("NewLong", "ShortCover") else "background-color: rgba(239,68,68,0.2)" if v in ("NewShort", "LongCover") else ""
+        styled_q = styled_q.map(lambda v: _oi_color(v) if isinstance(v, str) else "", subset=["OI Trend"])
+    for col in ["Vol(x)", "Dlv(x)"]:
+        if col in qdf_display.columns:
+            styled_q = styled_q.map(lambda v: "background-color: rgba(34,197,94,0.3); font-weight: 600" if v is not None and isinstance(v, (int, float)) and v >= 1.5 else "", subset=[col])
+    st.dataframe(styled_q, width="stretch", hide_index=True, height=height,
+                 column_config={"Symbol": st.column_config.LinkColumn(
+                     "Symbol", display_text=r".*symbol=(.+)$")})
+
+with tab_qp:
+    st.caption(f"Top 10 picks (score 20–34) | {quick_picks_date} | Click symbol for full analysis")
+    if quick_picks_display:
+        _render_table(quick_picks_display, height=400)
     else:
-        st.caption("No picks")
+        st.caption("No picks in sweet spot (score 20–34)")
+
+with tab_sheet:
+    st.caption(f"All {len(all_stocks_list)} stocks | {quick_picks_date} | Sorted by conviction + score | Click symbol for full analysis")
+    if all_stocks_list:
+        _render_table(all_stocks_list, height=600)
+    else:
+        st.caption("No stocks for this filter.")

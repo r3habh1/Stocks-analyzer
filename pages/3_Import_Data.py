@@ -19,7 +19,8 @@ st.title("📥 Import CSV Data")
 
 st.markdown("""
 Upload your daily **Derivative Analytics CSV**. The importer will:
-- **Add** new records  |  **Update** existing  |  **Never delete** history
+- **Add** new records  |  **Update** existing  |  **Never delete** history  
+- **Call/Put OI Chg %** are computed from cumulative OI (today vs yesterday).
 """)
 
 st.divider()
@@ -90,3 +91,14 @@ if dates:
     rows = [{"Date": d, "Records": db.main_coll().count_documents({"date": d})}
             for d in dates[-10:][::-1]]
     st.dataframe(pd.DataFrame(rows), width="stretch")
+
+    # Industry breakdown for latest date (e.g. Page Industries / sector-specific imports)
+    with st.expander("By Industry (latest date)"):
+        latest_docs = list(db.main_coll().find({"date": latest}))
+        if latest_docs:
+            from collections import Counter
+            industries = Counter(d.get("industry_name", "?") for d in latest_docs)
+            ind_df = pd.DataFrame([
+                {"Industry": k, "Stocks": v} for k, v in industries.most_common()
+            ])
+            st.dataframe(ind_df, width="stretch", hide_index=True)
