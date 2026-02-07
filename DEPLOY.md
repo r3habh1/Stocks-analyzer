@@ -51,3 +51,14 @@ Two deployment options:
 - Use MongoDB Atlas (cloud) — local MongoDB won’t work in the cloud
 - Add your deployment IP to Atlas **Network Access** (or use `0.0.0.0/0` for testing)
 - Ensure your Atlas user has read/write access to the database
+
+---
+
+## Troubleshooting: SSL handshake failed
+
+If you see `ServerSelectionTimeoutError: SSL handshake failed` or `TLSV1_ALERT_INTERNAL_ERROR`:
+
+1. **Atlas Network Access** — Whitelist `0.0.0.0/0` for testing.
+2. **Python version** — Python 3.13 can have SSL issues with Atlas; try 3.11 or 3.12.
+3. **Network** — Disable VPN or try a different network.
+4. **Connection string** — Ensure `MONGO_URI` in `.streamlit/secrets.toml` is correct.

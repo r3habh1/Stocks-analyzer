@@ -8,7 +8,17 @@ from core import loader, scorer, signals
 
 st.set_page_config(page_title="Stock Analysis", page_icon="🔍", layout="wide")
 
-# ── Date range filter (must run first so dates is defined) ────
+# ── Sidebar: Navigation first (consistent across pages) ─────────
+with st.sidebar:
+    st.header("Navigation")
+    st.page_link("app.py", label="Home", icon="🏠")
+    st.page_link("pages/1_Stock_Analysis.py", label="Stock Analysis", icon="🔍")
+    st.page_link("pages/2_Backtest.py", label="Backtest", icon="🔬")
+    st.page_link("pages/3_Import_Data.py", label="Import Data", icon="📥")
+    st.page_link("pages/4_Manual.py", label="Manual", icon="📖")
+    st.divider()
+
+# ── Date range filter ────────────────────────────────────────
 all_available_dates = loader.get_dates(limit=None)
 if not all_available_dates:
     st.error("No data."); st.stop()
@@ -18,13 +28,14 @@ with st.sidebar:
         "Date Range",
         ["Last 30 days", "Last 60 days", "Last 90 days", "All", "Custom"],
         index=1,
+        key="sa_date_range",
     )
 if date_range_preset == "Custom":
     from_idx = 0
     to_idx = len(all_available_dates) - 1
     col1, col2 = st.sidebar.columns(2)
-    from_date = col1.selectbox("From", all_available_dates, index=from_idx)
-    to_date = col2.selectbox("To", all_available_dates, index=to_idx)
+    from_date = col1.selectbox("From", all_available_dates, index=from_idx, key="sa_from")
+    to_date = col2.selectbox("To", all_available_dates, index=to_idx, key="sa_to")
     from_i = all_available_dates.index(from_date)
     to_i = all_available_dates.index(to_date)
     dates = all_available_dates[from_i : to_i + 1] if from_i <= to_i else all_available_dates[to_i : from_i + 1]
@@ -36,13 +47,7 @@ if not dates:
     st.error("No data for selected range."); st.stop()
 
 with st.sidebar:
-    st.header("Navigation")
     st.caption(f"Showing {len(dates)} days: {dates[0]} → {dates[-1]}")
-    st.page_link("app.py", label="Home", icon="🏠")
-    st.page_link("pages/1_Stock_Analysis.py", label="Stock Analysis", icon="🔍")
-    st.page_link("pages/2_Backtest.py", label="Backtest", icon="🔬")
-    st.page_link("pages/3_Import_Data.py", label="Import Data", icon="📥")
-    st.page_link("pages/4_Manual.py", label="Manual", icon="📖")
 
 st.title("🔍 Stock Analysis")
 
@@ -168,10 +173,29 @@ with r6:
                       margin=dict(t=35, b=10, l=40, r=10))
     st.plotly_chart(fig, width="stretch")
 
-# ── Row 4: Delivery ─────────────────────────────────────────
+# ── Row 4: Call OI vs Put OI + Delivery ───────────────────────
 r7, r8 = st.columns(2)
 
 with r7:
+    # Call OI (red) and Put OI (green) in same chart
+    if "cumulative_call_oi" in hdf.columns or "cumulative_put_oi" in hdf.columns:
+        fig = go.Figure()
+        if "cumulative_call_oi" in hdf.columns:
+            fig.add_trace(go.Scatter(
+                x=hdf["date"], y=hdf["cumulative_call_oi"], name="Call OI",
+                line=dict(color="#ef4444", width=2)))
+        if "cumulative_put_oi" in hdf.columns:
+            fig.add_trace(go.Scatter(
+                x=hdf["date"], y=hdf["cumulative_put_oi"], name="Put OI",
+                line=dict(color="#22c55e", width=2)))
+        fig.update_layout(title=f"{sel_sym} — Call OI vs Put OI", height=260,
+                          margin=dict(t=35, b=10, l=40, r=10),
+                          legend=dict(orientation="h", y=1.02))
+        st.plotly_chart(fig, width="stretch")
+    else:
+        st.caption("Call/Put OI data not available.")
+
+with r8:
     fig = go.Figure()
     fig.add_trace(go.Bar(x=hdf["date"], y=hdf["delivery_times"], name="Delivery(x)",
                           marker_color="#06b6d4"))
@@ -181,8 +205,8 @@ with r7:
                       margin=dict(t=35, b=10, l=40, r=10))
     st.plotly_chart(fig, width="stretch")
 
-with r8:
-    # OI Trend Timeline
+# ── Row 5: OI Trend Timeline ──────────────────────────────────
+with st.container():
     trend_color_map = {
         "NewLong": "#22c55e", "ShortCover": "#06b6d4",
         "NewShort": "#ef4444", "LongCover": "#fb923c",
@@ -216,5 +240,9 @@ with st.expander("📋 Full Historical Data"):
     show_cols = ["date", "close", "change_pct", "score", "conviction",
                  "oi_trend", "pcr", "pcr_change_1d", "oi_change_pct",
                  "volume_times", "delivery_times"]
-    st.dataframe(hdf[show_cols].sort_values("date", ascending=False),
+    if "cumulative_call_oi" in hdf.columns:
+        show_cols.append("cumulative_call_oi")
+    if "cumulative_put_oi" in hdf.columns:
+        show_cols.append("cumulative_put_oi")
+    st.dataframe(hdf[[c for c in show_cols if c in hdf.columns]].sort_values("date", ascending=False),
                  width="stretch", height=400)

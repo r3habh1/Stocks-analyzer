@@ -24,10 +24,23 @@ FIELD_MAP = {
 }
 
 
+def _client_kwargs():
+    """Build MongoClient kwargs; use certifi CA for Atlas SSL handshake."""
+    kwargs = {"serverSelectionTimeoutMS": 10000}
+    uri = _MONGO_URI
+    if "mongodb+srv://" in uri:
+        try:
+            import certifi
+            kwargs["tlsCAFile"] = certifi.where()
+        except ImportError:
+            pass  # certifi not installed, use default
+    return kwargs
+
+
 @st.cache_resource
 def get_client():
     """Cached MongoDB client (shared across the whole Streamlit app)."""
-    client = MongoClient(_MONGO_URI, serverSelectionTimeoutMS=5000)
+    client = MongoClient(_MONGO_URI, **_client_kwargs())
     client.admin.command("ping")
     return client
 

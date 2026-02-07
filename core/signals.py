@@ -94,6 +94,19 @@ def sector_rotation(data: dict, dates: list[str], window: int = 5,
 
     now_stocks = _filter(dates[-1])
     stats_now = _sector_stats(now_stocks)
+    # Group stocks by sector for drill-down
+    sector_stocks: dict[str, list[dict]] = defaultdict(list)
+    for s in now_stocks:
+        sec = s.get("sector", "?")
+        sector_stocks[sec].append({
+            "symbol": s.get("symbol", ""),
+            "change_pct": s.get("change_pct", 0),
+            "oi_trend": s.get("oi_trend", ""),
+            "pcr": s.get("pcr", 0),
+            "volume_times": s.get("volume_times", 0),
+            "delivery_times": s.get("delivery_times", 0),
+            "score": base_score(s),
+        })
 
     if window > 0:
         past_idx = max(0, len(dates) - window - 1)
@@ -114,6 +127,7 @@ def sector_rotation(data: dict, dates: list[str], window: int = 5,
         rotations.append({
             "Sector": sec,
             "Stocks": now["count"],
+            "stocks_list": sector_stocks.get(sec, []),
             "Avg OI Chg%": now["avg_oi_chg"],
             "OI Δ": round(oi_chg_delta, 2),
             "Bull%": now["bull_pct"],

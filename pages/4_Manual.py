@@ -11,6 +11,7 @@ with st.sidebar:
     st.page_link("pages/2_Backtest.py", label="Backtest", icon="🔬")
     st.page_link("pages/3_Import_Data.py", label="Import Data", icon="📥")
     st.page_link("pages/4_Manual.py", label="Manual", icon="📖")
+    st.divider()
 
 st.title("📖 Trading Dashboard — Manual")
 st.caption("A step-by-step guide to finding swing and options stocks using this app.")
