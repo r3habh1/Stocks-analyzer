@@ -137,7 +137,7 @@ st.divider()
 ctrl1, ctrl2 = st.columns([1, 3])
 mcap_filter = ctrl1.selectbox("Market Cap", ["All", "Large Cap", "Mid Cap", "Small Cap"])
 time_range = ctrl2.radio("Time Range", ["Today", "3 Days", "5 Days", "10 Days", "21 Days"],
-                         horizontal=True)
+                         index=1, horizontal=True)
 
 window_map = {"Today": 0, "3 Days": 3, "5 Days": 5, "10 Days": 10, "21 Days": 21}
 window = window_map[time_range]
