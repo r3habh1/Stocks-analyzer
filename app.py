@@ -246,6 +246,32 @@ if rot:
         idx = event.selection.rows[0]
         st.session_state.selected_sector = rdf.iloc[idx]["Sector"]
 
+    # Sector charts — always in 1 row
+    ch1, ch2 = st.columns(2)
+    with ch1:
+        rdf_sorted = rdf.sort_values("Bull Δ", ascending=True)
+        fig = px.bar(rdf_sorted, y="Sector", x="Bull Δ", orientation="h",
+                     color="Bull Δ",
+                     color_continuous_scale=["#ef4444", "#94a3b8", "#22c55e"],
+                     text="Bull Δ",
+                     title="OI Bullish % Change by Sector")
+        fig.update_traces(texttemplate="%{text:+.0f}%", textposition="outside")
+        fig.update_layout(margin=dict(t=40, b=10, l=10), height=350,
+                          showlegend=False, yaxis_title="")
+        st.plotly_chart(fig, width="stretch")
+
+    with ch2:
+        chg_col = "Agg Chg %" if "Agg Chg %" in rdf.columns else "Avg Chg%"
+        vol_col = "Vol(x)" if "Vol(x)" in rdf.columns else "Avg Vol(x)"
+        fig2 = px.scatter(rdf, x=chg_col, y="PCR Δ",
+                          size=vol_col, color="Bull Δ",
+                          hover_name="Sector", text="Sector",
+                          color_continuous_scale=["#ef4444", "#94a3b8", "#22c55e"],
+                          title="Sectors: Price Change vs PCR Change")
+        fig2.update_traces(textposition="top center", textfont_size=9)
+        fig2.update_layout(margin=dict(t=40, b=10, l=10), height=350)
+        st.plotly_chart(fig2, width="stretch")
+
     # Back button when sector selected
     if st.session_state.selected_sector:
         if st.button("← Back to Sector Rotation", key="sector_back"):
@@ -302,32 +328,6 @@ if rot:
                              "Symbol", display_text=r".*symbol=([^&]+)")})
         else:
             st.caption("No stocks in this sector.")
-    else:
-        # Charts (only when no sector selected)
-        ch1, ch2 = st.columns(2)
-        with ch1:
-            rdf_sorted = rdf.sort_values("Bull Δ", ascending=True)
-            fig = px.bar(rdf_sorted, y="Sector", x="Bull Δ", orientation="h",
-                         color="Bull Δ",
-                         color_continuous_scale=["#ef4444", "#94a3b8", "#22c55e"],
-                         text="Bull Δ",
-                         title="OI Bullish % Change by Sector")
-        fig.update_traces(texttemplate="%{text:+.0f}%", textposition="outside")
-        fig.update_layout(margin=dict(t=40, b=10, l=10), height=350,
-                          showlegend=False, yaxis_title="")
-        st.plotly_chart(fig, width="stretch")
-
-        with ch2:
-            chg_col = "Agg Chg %" if "Agg Chg %" in rdf.columns else "Avg Chg%"
-            vol_col = "Vol(x)" if "Vol(x)" in rdf.columns else "Avg Vol(x)"
-            fig2 = px.scatter(rdf, x=chg_col, y="PCR Δ",
-                              size=vol_col, color="Bull Δ",
-                              hover_name="Sector", text="Sector",
-                              color_continuous_scale=["#ef4444", "#94a3b8", "#22c55e"],
-                              title="Sectors: Price Change vs PCR Change")
-        fig2.update_traces(textposition="top center", textfont_size=9)
-        fig2.update_layout(margin=dict(t=40, b=10, l=10), height=350)
-        st.plotly_chart(fig2, width="stretch")
 else:
     st.caption("No sector data for this filter.")
 
@@ -337,9 +337,10 @@ st.divider()
 _dist_label = f"{time_range} | {mcap_filter}" if window > 0 else mcap_filter
 st.subheader(f"Distributions — {_dist_label}")
 
-# 1. OI Trend
-d1a, d1b = st.columns([1, 2])
-with d1a:
+# Row 1: 1. OI Trend | 2. Price Change % | 3. Volume
+d1, d2, d3 = st.columns(3)
+_chart_h = 240
+with d1:
     trend_counts = df["oi_trend"].value_counts().reset_index()
     trend_counts.columns = ["OI Trend", "Count"]
     color_map = {
@@ -350,21 +351,17 @@ with d1a:
     fig = px.pie(trend_counts, names="OI Trend", values="Count",
                  color="OI Trend", color_discrete_map=color_map, hole=0.4,
                  title="1. OI Trend")
-    fig.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=280,
+    fig.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=_chart_h,
                       legend=dict(font=dict(size=9)))
     st.plotly_chart(fig, width="stretch")
 
-# 2. Price Change %
-d2, _ = st.columns([1, 2])
 with d2:
     fig = px.histogram(df, x="change_pct", nbins=25, title="2. Price Change %",
                        color_discrete_sequence=["#6366f1"])
     fig.add_vline(x=0, line_dash="dash", line_color="white")
-    fig.update_layout(margin=dict(t=40, b=10, l=10), height=280)
+    fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h)
     st.plotly_chart(fig, width="stretch")
 
-# 3. Volume : 4. Delivery (highlight above 1.5)
-d3, d4 = st.columns(2)
 with d3:
     vdf = df[["volume_times"]].copy()
     vdf["above"] = vdf["volume_times"] >= 1.5
@@ -373,9 +370,12 @@ with d3:
                        title="3. Volume Multiplier")
     fig.add_vline(x=1.5, line_dash="dash", line_color="#22c55e",
                   annotation_text="1.5x")
-    fig.update_layout(margin=dict(t=40, b=10, l=10), height=260, showlegend=False)
+    fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h, showlegend=False)
     st.plotly_chart(fig, width="stretch")
 
+# Row 2: 4. Delivery | 5. Call OI Chg % | 6. Put OI Chg % (Call/Put need prev date)
+
+d4, d5, d6 = st.columns(3)
 with d4:
     ddf = df[["delivery_times"]].copy()
     ddf["above"] = ddf["delivery_times"] >= 1.5
@@ -384,10 +384,9 @@ with d4:
                        title="4. Delivery Multiplier")
     fig.add_vline(x=1.5, line_dash="dash", line_color="#22c55e",
                   annotation_text="1.5x")
-    fig.update_layout(margin=dict(t=40, b=10, l=10), height=260, showlegend=False)
+    fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h, showlegend=False)
     st.plotly_chart(fig, width="stretch")
 
-# 5. Call OI Chg % and 6. Put OI Chg % (computed from view vs prev date)
 if len(dates_up_to_view) >= 2:
     prev_d = dates_up_to_view[-2]
     prev_stocks = {s["symbol"]: s for s in sig_data.get(prev_d, {}).values()}
@@ -402,31 +401,30 @@ if len(dates_up_to_view) >= 2:
             call_chg_vals.append(s_enriched["call_oi_change_pct"])
         if s_enriched.get("put_oi_change_pct") is not None:
             put_chg_vals.append(s_enriched["put_oi_change_pct"])
-    d9, d10 = st.columns(2)
-    with d9:
+    with d5:
         if call_chg_vals:
             cdf = pd.DataFrame({"Call OI Chg %": call_chg_vals})
             fig = px.histogram(cdf, x="Call OI Chg %", nbins=25,
                                title="5. Call OI Change %", color_discrete_sequence=["#ef4444"])
             fig.add_vline(x=0, line_dash="dash", line_color="white")
-            fig.update_layout(margin=dict(t=40, b=10, l=10), height=260)
+            fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h)
             st.plotly_chart(fig, width="stretch")
-    with d10:
+    with d6:
         if put_chg_vals:
             pdf = pd.DataFrame({"Put OI Chg %": put_chg_vals})
             fig = px.histogram(pdf, x="Put OI Chg %", nbins=25,
                                title="6. Put OI Change %", color_discrete_sequence=["#22c55e"])
             fig.add_vline(x=0, line_dash="dash", line_color="white")
-            fig.update_layout(margin=dict(t=40, b=10, l=10), height=260)
+            fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h)
             st.plotly_chart(fig, width="stretch")
 
-# 7. PCR (highlight above 1.5)
+# Row 3: 7. PCR (full width, highlight above 1.5)
 if "pcr" in df.columns:
-    pdf = df[["pcr"]].dropna()
-    if not pdf.empty:
-        pdf = pdf.copy()
-        pdf["above"] = pdf["pcr"] >= 1.5
-        fig = px.histogram(pdf, x="pcr", nbins=25, color="above",
+    pcr_df = df[["pcr"]].dropna()
+    if not pcr_df.empty:
+        pcr_df = pcr_df.copy()
+        pcr_df["above"] = pcr_df["pcr"] >= 1.5
+        fig = px.histogram(pcr_df, x="pcr", nbins=25, color="above",
                            color_discrete_map={True: "#22c55e", False: "#f59e0b"},
                            title="7. PCR Distribution")
         fig.add_vline(x=0.5, line_dash="dot", line_color="#22c55e",
@@ -435,7 +433,7 @@ if "pcr" in df.columns:
                       annotation_text="PCR=1")
         fig.add_vline(x=1.5, line_dash="dash", line_color="#22c55e",
                       annotation_text="High PCR")
-        fig.update_layout(margin=dict(t=40, b=10, l=10), height=260, showlegend=False)
+        fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h, showlegend=False)
         st.plotly_chart(fig, width="stretch")
 
 st.divider()

@@ -30,14 +30,17 @@ After import, go back to the **Home** page to see fresh data.
 st.divider()
 
 # ── Step 2 ──────────────────────────────────────────────────
-st.header("Step 2: Read the Daily Summary")
+st.header("Step 2: Read the Daily Summary & Bullish vs Bearish")
 st.markdown("""
-The blue box at the top of the Home page gives you the big picture in one sentence:
+The blue box at the top gives you the big picture in one sentence:
 
 - How many stocks are **bullish vs bearish** today
 - Whether sentiment **improved or weakened** vs yesterday
 - **Avg PCR** and **Avg Change** across the market
 - Count of **trend flips**, **PCR extremes**, **delivery spikes**
+
+**Bullish vs Bearish** chart (just below) shows the trend over time for your MCap filter.
+Use the **View date** in the sidebar to see past days.
 
 **What to look for:** If bullish % is improving day-over-day and Avg PCR is below 0.7,
 the market is leaning bullish — favor long/call setups.
@@ -71,7 +74,7 @@ Choose **Market Cap** (All / Large / Mid / Small Cap) and **Time Range** (Today,
 - **Mid Cap** often has the best swing setups — more volatile, enough liquidity
 - Switch to **10-21 Days** to confirm longer-term sector trends
 
-These filters affect **Sector Rotation**, **Distributions**, and **Quick Picks**.
+These filters affect **Bullish vs Bearish**, **Sector Rotation**, **Distributions**, and **Quick Picks / Stock Sheet**.
 The Key Metrics and Alerts always show all stocks (unfiltered).
 """)
 
@@ -79,25 +82,24 @@ st.divider()
 
 # ── Step 5 ──────────────────────────────────────────────────
 st.header("Step 5: Sector Rotation — Find the Hot Sectors")
-st.markdown("This is your **most important section**. Here's what each column tells you:")
+st.markdown("**Bullish vs Bearish** (above) shows the overall trend over time. **Sector Rotation** is your most important section. Click a sector row to see its stocks.")
 
 st.markdown("""
 | Column | What It Tells You |
 |--------|-------------------|
-| **Avg OI Chg%** | Positive = fresh money entering the sector. Negative = unwinding |
-| **OI Δ** | How OI change shifted vs N days ago |
-| **Bull%** | % of stocks in that sector with bullish OI trend (NewLong or ShortCover) |
-| **Bull Δ** | How much Bull% changed vs N days ago. Green = sector improving |
-| **Avg Chg%** | Are stocks in this sector actually going up? |
+| **Agg Chg %** | Average price change in the sector |
 | **Chg Δ** | Price change momentum shift vs N days ago |
-| **Avg PCR** | Below 0.7 = call writers confident. Sweet spot for longs |
+| **Bull%** | % of stocks with bullish OI trend (NewLong or ShortCover) |
+| **Bull Δ** | How much Bull% changed vs N days ago. Green = sector improving |
+| **Vol(x)** | Above 1.5x = institutional participation (highlighted) |
+| **Dlv(x)** | Above 1.5x = real buying (highlighted) |
+| **PCR** | Below 0.7 = call writers confident. Sweet spot for longs |
 | **PCR Δ** | PCR shift. Declining PCR = growing bullish confidence |
-| **Avg Vol(x)** | Above 1.5x = institutional participation |
-| **Avg Dlv(x)** | Above 1.5x = real buying, not just F&O speculation |
-| **Direction** | Improving (Bull Δ > 10), Declining (< -10), or Stable |
+| **Agg Call OI Chg%** | Call OI change vs previous day |
+| **Agg Put OI Chg%** | Put OI change vs previous day |
+| **Direction** | Improving (Bull Δ > 10), Declining (< -10), or Stable — color-coded |
 
-**Ideal sector for swing:** High Bull%, positive OI Chg%, low PCR (< 0.7),
-rising Avg Chg%, and high delivery.
+**Ideal sector for swing:** High Bull%, low PCR (< 0.7), rising Agg Chg%, Vol/Dlv above 1.5x.
 """)
 
 st.info("**Pro tip:** The bar chart shows Bull Δ visually — sectors on the right (green) "
@@ -110,17 +112,13 @@ st.divider()
 # ── Step 6 ──────────────────────────────────────────────────
 st.header("Step 6: Distributions — Confirm Your Thesis")
 st.markdown("""
-These charts show the distribution of all stocks (filtered by MCap and Time Range):
+These charts show the distribution of all stocks (filtered by MCap and Time Range), in 3-per-row layout:
 
-- **OI Trend Pie** — Is the market dominated by NewLong/ShortCover (bullish)
-  or NewShort/LongCover (bearish)?
-- **PCR Histogram** — Are most stocks clustered below 0.5 (extremely bullish) or above 1.0?
-- **Price Change** — Is the distribution skewed right (more green) or left (more red)?
-- **Volume Multiplier** — Any spikes above 1.5x?
-- **Delivery Multiplier** — Spikes above 2.0x indicate institutional buying
+**Row 1:** OI Trend (pie) | Price Change % | Volume (≥1.5x highlighted)  
+**Row 2:** Delivery (≥1.5x highlighted) | Call OI Change % | Put OI Change %  
+**Row 3:** PCR (reference lines at 0.5, 1.0, 1.5; ≥1.5 highlighted)
 
-When you change the **Time Range**, distributions aggregate data across all days in that range,
-giving you a richer picture than just one day.
+When you change the **Time Range**, distributions aggregate data across all days in that range.
 """)
 
 st.divider()
@@ -154,17 +152,17 @@ Persistent conviction = higher probability setup. These are the most reliable.
 st.divider()
 
 # ── Step 8 ──────────────────────────────────────────────────
-st.header("Step 8: Quick Picks — Your Shortlist")
+st.header("Step 8: Quick Picks & Stock Sheet — Your Shortlist")
 st.markdown("""
-Two tables at the bottom of the Home page:
+Two **tabs** at the bottom of the Home page:
 
-**Options Picks** — Sorted by **Conviction** (0-19). Higher conviction = higher probability
-of a big next-day move. Focus on stocks with **Conv > 12**.
+**Quick Picks** — Top 10 stocks in the sweet spot (Score 20–34), sorted by **Conviction + Score**.
+Higher conviction = higher probability of a big next-day move. Focus on **Conv > 12**.
 
-**Swing Picks** — Sorted by **Score** (0-40+). Score **25-34** is the sweet spot.
-These stocks have the best combination of OI, PCR, volume, and delivery.
+**Stock Sheet** — All stocks for your filter (MCap + view date), sorted by conviction + score.
+Use this as a full action sheet to scan the entire universe.
 
-Click any symbol to jump to full Stock Analysis.
+Both tables show OI, PCR, Vol, Delivery, and OI Trend. Click any symbol to jump to full Stock Analysis.
 """)
 
 st.divider()
@@ -172,7 +170,7 @@ st.divider()
 # ── Step 9 ──────────────────────────────────────────────────
 st.header("Step 9: Stock Analysis — Deep Dive Before Trading")
 st.markdown("""
-Once you click a stock, you see its full history:
+Once you click a stock, the header shows **Symbol | MCap | View Date**. You see its full history:
 
 | Chart | What to Look For |
 |-------|-----------------|
@@ -219,11 +217,12 @@ st.header("Daily Workflow (5 Minutes)")
 st.markdown("""
 1. **Upload CSV** in Import Data
 2. **Read Daily Summary** — bullish or bearish day?
-3. **Check Sector Rotation** at 5 Days — which sectors are improving?
-4. **Scan Alerts** — any trend flips or delivery spikes in hot sectors?
-5. **Check Quick Picks** — top 3-5 by conviction
-6. **Click into top candidates** — verify on Stock Analysis page
-7. **Trade** the ones that tick 6+ items on the checklist above
+3. **Check Bullish vs Bearish** chart — trend over time
+4. **Check Sector Rotation** at 5 Days — which sectors are improving?
+5. **Scan Alerts** — any trend flips or delivery spikes in hot sectors?
+6. **Check Quick Picks tab** — top 10; switch to Stock Sheet for full scan
+7. **Click into top candidates** — verify on Stock Analysis page
+8. **Trade** the ones that tick 6+ items on the checklist above
 """)
 
 st.divider()
