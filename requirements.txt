@@ -5,3 +5,5 @@ certifi>=2024.0.0
 pandas>=2.0.0
 plotly>=5.15.0
 dnspython>=2.4.0
+streamlit-lightweight-charts>=0.7.20
+openpyxl>=3.1.0

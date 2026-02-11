@@ -1,30 +1,37 @@
 """
-Trading Dashboard — Home / Market Pulse + Sector Rotation + Distributions
+Trading Dashboard — Home / Market Pulse + Sector Rotation
 Run:  streamlit run app.py
 """
 
 import streamlit as st
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
-from core import loader, scorer, signals
+from core import loader, scorer, signals, recommender, chart_utils
 
-# Session state for sector drill-down (same page, no redirect)
+_USE_TV = False
+try:
+    from streamlit_lightweight_charts import renderLightweightCharts
+    _USE_TV = True
+except ImportError:
+    pass
+
+# Session state
 if "selected_sector" not in st.session_state:
     st.session_state.selected_sector = None
 if "sector_df_key" not in st.session_state:
     st.session_state.sector_df_key = 0
+if "watchlist" not in st.session_state:
+    st.session_state.watchlist = set()
 
 st.set_page_config(page_title="Trading Dashboard", page_icon="📈", layout="wide")
 
-# ── Sidebar: Navigation first (consistent across pages) ───────
+# ── Sidebar: Navigation ───────────────────────────────────────
 with st.sidebar:
     st.header("Navigation")
     st.page_link("app.py", label="Home", icon="🏠")
-    st.page_link("pages/1_Stock_Analysis.py", label="Stock Analysis", icon="🔍")
-    st.page_link("pages/2_Backtest.py", label="Backtest", icon="🔬")
-    st.page_link("pages/3_Import_Data.py", label="Import Data", icon="📥")
-    st.page_link("pages/4_Manual.py", label="Manual", icon="📖")
+    st.page_link("pages/2_Stock_Analysis.py", label="Stock Analysis", icon="🔍")
+    st.page_link("pages/3_Stock_Action_Sheet.py", label="Stock Sheet", icon="📋")
+    st.page_link("pages/4_Import_Data.py", label="Import Data", icon="📥")
     st.divider()
 
 st.title("📈 Trading Dashboard")
@@ -106,10 +113,6 @@ dates_up_to_view = [d for d in dates if d <= view_date] if view_date else []
 view_stocks = list(sig_data.get(view_date, {}).values()) if view_date else []
 view_df = pd.DataFrame(view_stocks) if view_stocks else all_df
 
-with st.sidebar:
-    date_range_label = f"{dates[0]} → {dates[-1]}" if dates else "—"
-    st.caption(f"Stocks: {len(view_df)} | Dates: {len(dates)} | Range: {date_range_label}")
-
 # ── Daily Summary ───────────────────────────────────────────
 summary = signals.daily_summary(sig_data, dates_up_to_view) if dates_up_to_view else "No data for selected date."
 st.info(summary)
@@ -133,89 +136,25 @@ c6.metric("Avg Delivery", f"{avg_dlv:.2f}x")
 
 st.divider()
 
-# ── Filters (MCap + Time Range) — above Sector Rotation ─────
-ctrl1, ctrl2 = st.columns([1, 3])
-mcap_filter = ctrl1.selectbox("Market Cap", ["All", "Large Cap", "Mid Cap", "Small Cap"])
-time_range = ctrl2.radio("Time Range", ["Today", "3 Days", "5 Days", "10 Days", "21 Days"],
-                         index=1, horizontal=True)
-
-window_map = {"Today": 0, "3 Days": 3, "5 Days": 5, "10 Days": 10, "21 Days": 21}
-window = window_map[time_range]
-
-# Build filtered stock list for distributions (use view date; fallback to all_stocks if empty)
-_stocks_for_filter = view_stocks if view_stocks else all_stocks
-if mcap_filter == "All":
-    filtered_stocks = _stocks_for_filter
-else:
-    filtered_stocks = [s for s in _stocks_for_filter if s.get("mcap_category") == mcap_filter]
-
-# Quick Picks: use stocks from view date
-quick_picks_date = view_date
-quick_picks_stocks = view_stocks if view_stocks else all_stocks
-if mcap_filter == "All":
-    quick_picks_filtered = quick_picks_stocks
-else:
-    quick_picks_filtered = [s for s in quick_picks_stocks if s.get("mcap_category") == mcap_filter]
-
-if not filtered_stocks:
-    st.warning(f"No {mcap_filter} stocks found."); st.stop()
-
-# Build distribution DataFrame — aggregate across selected time range (ending at view date)
-if window == 0:
-    dist_rows = filtered_stocks
-else:
-    range_dates = dates_up_to_view[-window:] if window <= len(dates_up_to_view) else dates_up_to_view
-    dist_rows = []
-    for dt in range_dates:
-        for s in sig_data.get(dt, {}).values():
-            if mcap_filter != "All" and s.get("mcap_category") != mcap_filter:
-                continue
-            dist_rows.append(s)
-
-if not dist_rows:
-    dist_rows = filtered_stocks
-
-df = pd.DataFrame(dist_rows)
-
-# ── Bullish / Bearish Time Series (MCap filtered) — above Sector Rotation ───
-st.subheader(f"Bullish vs Bearish Over Time — {mcap_filter} | {view_date}")
-
-ts_rows = []
-for dt in dates_up_to_view:
-    stocks = list(sig_data.get(dt, {}).values())
-    if mcap_filter != "All":
-        stocks = [s for s in stocks if s.get("mcap_category") == mcap_filter]
-    n_bull = sum(1 for s in stocks if s.get("oi_trend", "") in bullish_trends)
-    n_bear = sum(1 for s in stocks if s.get("oi_trend", "") in bearish_trends)
-    ts_rows.append({"date": dt, "Bullish": n_bull, "Bearish": n_bear})
-
-if ts_rows:
-    tsdf = pd.DataFrame(ts_rows)
-    fig_ts = go.Figure()
-    fig_ts.add_trace(go.Scatter(x=tsdf["date"], y=tsdf["Bullish"], name="Bullish",
-                                line=dict(color="#22c55e"), mode="lines+markers"))
-    fig_ts.add_trace(go.Scatter(x=tsdf["date"], y=tsdf["Bearish"], name="Bearish",
-                                line=dict(color="#ef4444"), mode="lines+markers"))
-    fig_ts.update_layout(height=320, margin=dict(t=30, b=40), legend=dict(orientation="h"),
-                         xaxis_title="Date", yaxis_title="Count")
-    st.plotly_chart(fig_ts, use_container_width=True)
-else:
-    st.caption("No time series data for this filter.")
-
-st.divider()
+# ── Quick filters (MCap for Top 7 / Action Sheet) ─────────────
+fc1, fc2 = st.columns(2)
+with fc1:
+    mcap_filter = st.selectbox("Market Cap", ["All", "Large Cap", "Mid Cap", "Small Cap"], key="mcap_home")
+with fc2:
+    window = st.selectbox("Window", [3, 5, 10, 21], format_func=lambda x: f"{x}d", index=1, key="sector_window")
 
 # ── Sector Rotation ──────────────────────────────────────────
-st.subheader(f"Sector Rotation — {time_range} | {mcap_filter}")
+st.subheader(f"Sector Rotation — {mcap_filter}")
 st.caption("Click a sector row to see its stocks (same page)")
-
 rot = signals.sector_rotation(sig_data, dates_up_to_view, window, mcap_filter)
+
 if rot:
     sector_to_stocks = {r["Sector"]: r.get("stocks_list", []) for r in rot}
     rot_display = [{k: v for k, v in r.items() if k != "stocks_list"} for r in rot]
     rdf = pd.DataFrame(rot_display)
 
     # Sector rotation table — click a row to see its stocks (same page)
-    fmt_map = {"Agg Chg %": "{:+.2f}", "Chg Δ": "{:+.2f}", "Bull%": "{:.1f}", "Bull Δ": "{:+.1f}",
+    fmt_map = {"Agg Chg %": "{:+.2f}", "Chg Δ": "{:+.2f}",
                "Vol(x)": "{:.2f}", "Dlv(x)": "{:.2f}", "PCR": "{:.2f}", "PCR Δ": "{:+.2f}",
                "Agg Call OI": "{:,.0f}", "Agg Put OI": "{:,.0f}",
                "Agg Call OI Chg%": "{:+.2f}", "Agg Put OI Chg%": "{:+.2f}"}
@@ -245,32 +184,6 @@ if rot:
     if hasattr(event, "selection") and event.selection and event.selection.rows:
         idx = event.selection.rows[0]
         st.session_state.selected_sector = rdf.iloc[idx]["Sector"]
-
-    # Sector charts — always in 1 row
-    ch1, ch2 = st.columns(2)
-    with ch1:
-        rdf_sorted = rdf.sort_values("Bull Δ", ascending=True)
-        fig = px.bar(rdf_sorted, y="Sector", x="Bull Δ", orientation="h",
-                     color="Bull Δ",
-                     color_continuous_scale=["#ef4444", "#94a3b8", "#22c55e"],
-                     text="Bull Δ",
-                     title="OI Bullish % Change by Sector")
-        fig.update_traces(texttemplate="%{text:+.0f}%", textposition="outside")
-        fig.update_layout(margin=dict(t=40, b=10, l=10), height=350,
-                          showlegend=False, yaxis_title="")
-        st.plotly_chart(fig, width="stretch")
-
-    with ch2:
-        chg_col = "Agg Chg %" if "Agg Chg %" in rdf.columns else "Avg Chg%"
-        vol_col = "Vol(x)" if "Vol(x)" in rdf.columns else "Avg Vol(x)"
-        fig2 = px.scatter(rdf, x=chg_col, y="PCR Δ",
-                          size=vol_col, color="Bull Δ",
-                          hover_name="Sector", text="Sector",
-                          color_continuous_scale=["#ef4444", "#94a3b8", "#22c55e"],
-                          title="Sectors: Price Change vs PCR Change")
-        fig2.update_traces(textposition="top center", textfont_size=9)
-        fig2.update_layout(margin=dict(t=40, b=10, l=10), height=350)
-        st.plotly_chart(fig2, width="stretch")
 
     # Back button when sector selected
     if st.session_state.selected_sector:
@@ -333,253 +246,101 @@ else:
 
 st.divider()
 
-# ── Distributions (filtered by MCap) ────────────────────────
-_dist_label = f"{time_range} | {mcap_filter}" if window > 0 else mcap_filter
-st.subheader(f"Distributions — {_dist_label}")
+# ── Top 7 Picks (Outrunner) ───────────────────────────────────
+st.subheader(f"Top 7 Picks — {view_date} (Outrunner Strategy)")
+top7 = recommender.get_top_picks(sig_data, dates_up_to_view, view_date, mcap_filter, top_n=7)
+if top7:
+    for i, p in enumerate(top7, 1):
+        sym = p["symbol"]
+        sigs = " ".join(f"[{s}]" for s in p.get("signals", [])) or "—"
+        chg = p.get("change_pct")
+        chg_str = f"{chg:+.1f}%" if chg is not None else "—"
+        st.markdown(
+            f"**#{i}** [{sym}](/Stock_Analysis?symbol={sym}) — Conv: {p['conviction']} | Score: {p['score']} | Chg: {chg_str} | {sigs}"
+        )
+else:
+    st.caption("No picks in sweet spot (score 20–34) for this filter.")
 
-# Row 1: 1. OI Trend | 2. Price Change % | 3. Volume
-d1, d2, d3 = st.columns(3)
-_chart_h = 240
-with d1:
-    trend_counts = df["oi_trend"].value_counts().reset_index()
-    trend_counts.columns = ["OI Trend", "Count"]
-    color_map = {
-        "NewLong": "#22c55e", "ShortCover": "#06b6d4",
-        "NewShort": "#ef4444", "LongCover": "#fb923c",
-        "Neutral": "#94a3b8",
-    }
-    fig = px.pie(trend_counts, names="OI Trend", values="Count",
-                 color="OI Trend", color_discrete_map=color_map, hole=0.4,
-                 title="1. OI Trend")
-    fig.update_layout(margin=dict(t=40, b=10, l=10, r=10), height=_chart_h,
-                      legend=dict(font=dict(size=9)))
-    st.plotly_chart(fig, width="stretch")
-
-with d2:
-    fig = px.histogram(df, x="change_pct", nbins=25, title="2. Price Change %",
-                       color_discrete_sequence=["#6366f1"])
-    fig.add_vline(x=0, line_dash="dash", line_color="white")
-    fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h)
-    st.plotly_chart(fig, width="stretch")
-
-with d3:
-    vdf = df[["volume_times"]].copy()
-    vdf["above"] = vdf["volume_times"] >= 1.5
-    fig = px.histogram(vdf, x="volume_times", nbins=20, color="above",
-                       color_discrete_map={True: "#22c55e", False: "#06b6d4"},
-                       title="3. Volume Multiplier")
-    fig.add_vline(x=1.5, line_dash="dash", line_color="#22c55e",
-                  annotation_text="1.5x")
-    fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h, showlegend=False)
-    st.plotly_chart(fig, width="stretch")
-
-# Row 2: 4. Delivery | 5. Call OI Chg % | 6. Put OI Chg % (Call/Put need prev date)
-
-d4, d5, d6 = st.columns(3)
-with d4:
-    ddf = df[["delivery_times"]].copy()
-    ddf["above"] = ddf["delivery_times"] >= 1.5
-    fig = px.histogram(ddf, x="delivery_times", nbins=20, color="above",
-                       color_discrete_map={True: "#22c55e", False: "#8b5cf6"},
-                       title="4. Delivery Multiplier")
-    fig.add_vline(x=1.5, line_dash="dash", line_color="#22c55e",
-                  annotation_text="1.5x")
-    fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h, showlegend=False)
-    st.plotly_chart(fig, width="stretch")
-
-if len(dates_up_to_view) >= 2:
-    prev_d = dates_up_to_view[-2]
-    prev_stocks = {s["symbol"]: s for s in sig_data.get(prev_d, {}).values()}
-    view_stocks_flat = list(sig_data.get(view_date, {}).values())
-    if mcap_filter != "All":
-        view_stocks_flat = [s for s in view_stocks_flat if s.get("mcap_category") == mcap_filter]
-    call_chg_vals = []
-    put_chg_vals = []
-    for s in view_stocks_flat:
-        s_enriched = signals.enrich_oi_change_pct(s, prev_stocks.get(s.get("symbol")))
-        if s_enriched.get("call_oi_change_pct") is not None:
-            call_chg_vals.append(s_enriched["call_oi_change_pct"])
-        if s_enriched.get("put_oi_change_pct") is not None:
-            put_chg_vals.append(s_enriched["put_oi_change_pct"])
-    with d5:
-        if call_chg_vals:
-            cdf = pd.DataFrame({"Call OI Chg %": call_chg_vals})
-            fig = px.histogram(cdf, x="Call OI Chg %", nbins=25,
-                               title="5. Call OI Change %", color_discrete_sequence=["#ef4444"])
-            fig.add_vline(x=0, line_dash="dash", line_color="white")
-            fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h)
-            st.plotly_chart(fig, width="stretch")
-    with d6:
-        if put_chg_vals:
-            pdf = pd.DataFrame({"Put OI Chg %": put_chg_vals})
-            fig = px.histogram(pdf, x="Put OI Chg %", nbins=25,
-                               title="6. Put OI Change %", color_discrete_sequence=["#22c55e"])
-            fig.add_vline(x=0, line_dash="dash", line_color="white")
-            fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h)
-            st.plotly_chart(fig, width="stretch")
-
-# Row 3: 7. PCR (full width, highlight above 1.5)
-if "pcr" in df.columns:
-    pcr_df = df[["pcr"]].dropna()
-    if not pcr_df.empty:
-        pcr_df = pcr_df.copy()
-        pcr_df["above"] = pcr_df["pcr"] >= 1.5
-        fig = px.histogram(pcr_df, x="pcr", nbins=25, color="above",
-                           color_discrete_map={True: "#22c55e", False: "#f59e0b"},
-                           title="7. PCR Distribution")
-        fig.add_vline(x=0.5, line_dash="dot", line_color="#22c55e",
-                      annotation_text="Extreme Low")
-        fig.add_vline(x=1.0, line_dash="dash", line_color="#ef4444",
-                      annotation_text="PCR=1")
-        fig.add_vline(x=1.5, line_dash="dash", line_color="#22c55e",
-                      annotation_text="High PCR")
-        fig.update_layout(margin=dict(t=40, b=10, l=10), height=_chart_h, showlegend=False)
-        st.plotly_chart(fig, width="stretch")
+# ── Historical Top 7 Performance ──────────────────────────────
+hist_perf = recommender.get_historical_top7_performance(sig_data, dates_up_to_view, lookback_days=5)
+if hist_perf:
+    with st.expander(f"Last 5 days: {hist_perf['green_count']}/{hist_perf['total_picks']} green, avg {hist_perf['avg_chg_pct']:+.1f}%"):
+        for d in hist_perf.get("details", [])[:10]:
+            st.caption(f"{d['date']} {d['symbol']}: {d['pnl_pct']:+.1f}%")
 
 st.divider()
 
-# ── Alerts & Signals (unfiltered — all stocks) ──────────────
-st.subheader(f"Alerts & Signals — {view_date}")
-a1, a2, a3, a4 = st.columns(4)
+# ── Alerts (below all) ─────────────────────────────────────────
+st.subheader("🔔 Alerts & Signals")
+alert_type = st.selectbox(
+    "Alert Type",
+    ["All", "OI Trend Flips", "PCR Extremes", "Delivery Spikes", "3+ Day Streaks"],
+    key="home_alert_type",
+)
 
-flips = signals.detect_trend_flips(sig_data, dates_up_to_view)
-with a1:
-    st.markdown("**OI Trend Flips**")
-    if flips:
-        for f in flips[:5]:
-            st.markdown(
-                f"[**{f['symbol']}**](/Stock_Analysis?symbol={f['symbol']}) "
-                f"`{f['prev_trend']}` → `{f['new_trend']}`  \n"
-                f"Conv: {f['conviction']} | {f['change_pct']:+.1f}%")
-    else:
-        st.caption("No bullish flips")
+def _filter_mcap(items, mcap):
+    if mcap == "All":
+        return items
+    return [x for x in items if x.get("mcap_category") == mcap]
 
+flips = _filter_mcap(signals.detect_trend_flips(sig_data, dates_up_to_view), mcap_filter)
 ext = signals.pcr_extremes(sig_data, view_date)
-with a2:
+low_pcr = _filter_mcap(ext["low_pcr"], mcap_filter)
+high_pcr = _filter_mcap(ext["high_pcr"], mcap_filter)
+spikes = _filter_mcap(signals.delivery_spikes(sig_data, view_date, 2.0), mcap_filter)
+streaks = _filter_mcap(signals.score_streaks(sig_data, dates_up_to_view, 3), mcap_filter)
+
+n_flips, n_pcr = len(flips), len(low_pcr) + len(high_pcr)
+n_spikes, n_streaks = len(spikes), len(streaks)
+st.caption(f"**{view_date}** | {mcap_filter} | {n_flips} flips · {n_pcr} PCR extremes · {n_spikes} delivery spikes · {n_streaks} streaks")
+
+if alert_type in ("All", "OI Trend Flips"):
+    st.markdown("**OI Trend Flips (Bearish → Bullish)**")
+    if flips:
+        flips_df = pd.DataFrame(flips)
+        flips_df["symbol"] = flips_df["symbol"].apply(lambda s: f"/Stock_Analysis?symbol={s}")
+        display_cols = ["symbol", "prev_trend", "new_trend", "conviction", "change_pct", "pcr", "sector"]
+        st.dataframe(flips_df[[c for c in display_cols if c in flips_df.columns]], hide_index=True,
+                    column_config={"symbol": st.column_config.LinkColumn("Symbol", display_text=r".*symbol=([^&]+)")})
+    else:
+        st.caption("No bullish flips for this filter.")
+
+if alert_type in ("All", "PCR Extremes"):
     st.markdown("**PCR Extremes**")
-    # Low PCR — put writers confident (potential calls)
-    if ext["low_pcr"]:
-        st.markdown(f"*Low PCR ≤ 0.5 ({len(ext['low_pcr'])}):*")
-        for e in ext["low_pcr"][:3]:
-            st.markdown(
-                f"[**{e['symbol']}**](/Stock_Analysis?symbol={e['symbol']}) "
-                f"PCR {e['pcr']:.2f} | `{e['oi_trend']}` | {e['change_pct']:+.1f}%")
-    else:
-        st.caption("No low PCR extremes")
-    # High PCR — put buyers heavy (potential puts)
-    if ext["high_pcr"]:
-        st.markdown(f"*High PCR ≥ 1.5 ({len(ext['high_pcr'])}):*")
-        for e in ext["high_pcr"][:3]:
-            st.markdown(
-                f"[**{e['symbol']}**](/Stock_Analysis?symbol={e['symbol']}) "
-                f"PCR {e['pcr']:.2f} | `{e['oi_trend']}` | {e['change_pct']:+.1f}%")
-    else:
-        st.caption("No high PCR extremes")
+    c1, c2 = st.columns(2)
+    with c1:
+        st.caption("Low PCR ≤ 0.5")
+        if low_pcr:
+            ldf = pd.DataFrame(low_pcr)[["symbol", "pcr", "change_pct", "oi_trend", "sector"]]
+            ldf["symbol"] = ldf["symbol"].apply(lambda s: f"/Stock_Analysis?symbol={s}")
+            st.dataframe(ldf, hide_index=True, column_config={"symbol": st.column_config.LinkColumn("Symbol", display_text=r".*symbol=([^&]+)")})
+        else:
+            st.caption("None")
+    with c2:
+        st.caption("High PCR ≥ 1.5")
+        if high_pcr:
+            hdf = pd.DataFrame(high_pcr)[["symbol", "pcr", "change_pct", "oi_trend", "sector"]]
+            hdf["symbol"] = hdf["symbol"].apply(lambda s: f"/Stock_Analysis?symbol={s}")
+            st.dataframe(hdf, hide_index=True, column_config={"symbol": st.column_config.LinkColumn("Symbol", display_text=r".*symbol=([^&]+)")})
+        else:
+            st.caption("None")
 
-spikes = signals.delivery_spikes(sig_data, view_date)
-with a3:
-    st.markdown("**Delivery Spikes (≥2x)**")
+if alert_type in ("All", "Delivery Spikes"):
+    st.markdown("**Delivery Spikes (≥ 2x)**")
     if spikes:
-        for s in spikes[:5]:
-            st.markdown(
-                f"[**{s['symbol']}**](/Stock_Analysis?symbol={s['symbol']}) "
-                f"{s['delivery_times']:.1f}x dlv  \n"
-                f"Score: {s['score']} | {s['change_pct']:+.1f}%")
+        spdf = pd.DataFrame(spikes)[["symbol", "delivery_times", "volume_times", "score", "change_pct", "oi_trend", "sector"]]
+        spdf["symbol"] = spdf["symbol"].apply(lambda s: f"/Stock_Analysis?symbol={s}")
+        st.dataframe(spdf, hide_index=True, column_config={"symbol": st.column_config.LinkColumn("Symbol", display_text=r".*symbol=([^&]+)")})
     else:
-        st.caption("No delivery spikes")
+        st.caption("No delivery spikes.")
 
-streaks = signals.score_streaks(sig_data, dates_up_to_view, 3)
-with a4:
-    st.markdown("**3+ Day Streaks**")
+if alert_type in ("All", "3+ Day Streaks"):
+    st.markdown("**3+ Day Streaks (Score 20–34)**")
     if streaks:
-        for s in streaks[:5]:
-            st.markdown(
-                f"[**{s['symbol']}**](/Stock_Analysis?symbol={s['symbol']}) "
-                f"{s['streak_days']}d streak  \n"
-                f"Conv: {s['conviction']} | Score: {s['score']}")
+        stdf = pd.DataFrame(streaks)[["symbol", "streak_days", "conviction", "score", "change_pct", "oi_trend", "sector"]]
+        stdf["symbol"] = stdf["symbol"].apply(lambda s: f"/Stock_Analysis?symbol={s}")
+        st.dataframe(stdf, hide_index=True, column_config={"symbol": st.column_config.LinkColumn("Symbol", display_text=r".*symbol=([^&]+)")})
     else:
-        st.caption("No multi-day streaks")
+        st.caption("No multi-day streaks.")
 
-st.divider()
 
-# ── Quick Picks / Stock Action Sheet ───────────────────────────
-STOCK_URL = "/Stock_Analysis?symbol={}"
-
-prev_date = dates_up_to_view[-2] if len(dates_up_to_view) >= 2 else None
-prev_sig = sig_data.get(prev_date, {}) if prev_date else {}
-
-# Build full stock list (all stocks) for "All" option
-all_stocks_list = []
-for s in quick_picks_filtered:
-    sc = scorer.base_score(s)
-    s_enriched = signals.enrich_oi_change_pct(s, prev_sig.get(s["symbol"]))
-    conv = scorer.outrunner_conviction(s_enriched)
-    combined = conv["conviction"] + sc
-    all_stocks_list.append({
-        "Symbol": STOCK_URL.format(s["symbol"]),
-        "Conv": conv["conviction"],
-        "Score": sc,
-        "Combined": combined,
-        "Chg%": s.get("change_pct"),
-        "Vol(x)": s.get("volume_times", 0),
-        "Dlv(x)": s.get("delivery_times", 0),
-        "Fut OI": s.get("cumulative_future_oi"),
-        "Fut OI Chg%": s.get("oi_change_pct"),
-        "Call OI": s.get("cumulative_call_oi"),
-        "Call OI Chg%": s_enriched.get("call_oi_change_pct"),
-        "Put OI": s.get("cumulative_put_oi"),
-        "Put OI Chg%": s_enriched.get("put_oi_change_pct"),
-        "PCR": s.get("pcr", 0),
-        "PCR Chg": s.get("pcr_change_1d"),
-        "OI Trend": s.get("oi_trend", ""),
-        "MCap": s.get("mcap_category", ""),
-    })
-all_stocks_list.sort(key=lambda x: x["Combined"], reverse=True)
-
-# Sweet spot picks (score 20–34) — top 10 for Quick Picks tab
-quick_picks_list = [r for r in all_stocks_list if 20 <= r["Score"] <= 34]
-quick_picks_display = quick_picks_list[:10]
-
-tab_qp, tab_sheet = st.tabs(["Quick Picks", "Stock Sheet"])
-
-def _render_table(display_list, height=400):
-    if not display_list:
-        return
-    qdf = pd.DataFrame(display_list)
-    display_cols = ["Symbol", "Conv", "Score", "Chg%", "Vol(x)", "Dlv(x)",
-                   "Fut OI", "Fut OI Chg%", "Call OI", "Call OI Chg%", "Put OI", "Put OI Chg%",
-                   "PCR", "PCR Chg", "OI Trend", "MCap"]
-    qdf_display = qdf[[c for c in display_cols if c in qdf.columns]]
-    chg_cols = [c for c in qdf_display.columns if "Chg" in c]
-    fmt_dict = {c: "{:+.1f}" for c in ["Chg%", "Fut OI Chg%", "Call OI Chg%", "Put OI Chg%"] if c in qdf_display.columns}
-    fmt_dict.update({c: "{:+.2f}" for c in ["PCR Chg"] if c in qdf_display.columns})
-    fmt_dict.update({c: "{:.2f}" for c in ["Vol(x)", "Dlv(x)", "PCR"] if c in qdf_display.columns})
-    fmt_dict.update({c: "{:,.0f}" for c in ["Fut OI", "Call OI", "Put OI"] if c in qdf_display.columns})
-    _color_chg = lambda s: ["color: #22c55e" if v is not None and isinstance(v, (int, float)) and v > 0
-                           else "color: #ef4444" if v is not None and isinstance(v, (int, float)) and v < 0 else "" for v in s]
-    styled_q = qdf_display.style.format(fmt_dict, na_rep="—")
-    if chg_cols:
-        styled_q = styled_q.apply(_color_chg, subset=chg_cols)
-    if "OI Trend" in qdf_display.columns:
-        _oi_color = lambda v: "background-color: rgba(34,197,94,0.2)" if v in ("NewLong", "ShortCover") else "background-color: rgba(239,68,68,0.2)" if v in ("NewShort", "LongCover") else ""
-        styled_q = styled_q.map(lambda v: _oi_color(v) if isinstance(v, str) else "", subset=["OI Trend"])
-    for col in ["Vol(x)", "Dlv(x)"]:
-        if col in qdf_display.columns:
-            styled_q = styled_q.map(lambda v: "background-color: rgba(34,197,94,0.3); font-weight: 600" if v is not None and isinstance(v, (int, float)) and v >= 1.5 else "", subset=[col])
-    st.dataframe(styled_q, width="stretch", hide_index=True, height=height,
-                 column_config={"Symbol": st.column_config.LinkColumn(
-                     "Symbol", display_text=r".*symbol=(.+)$")})
-
-with tab_qp:
-    st.caption(f"Top 10 picks (score 20–34) | {quick_picks_date} | Click symbol for full analysis")
-    if quick_picks_display:
-        _render_table(quick_picks_display, height=400)
-    else:
-        st.caption("No picks in sweet spot (score 20–34)")
-
-with tab_sheet:
-    st.caption(f"All {len(all_stocks_list)} stocks | {quick_picks_date} | Sorted by conviction + score | Click symbol for full analysis")
-    if all_stocks_list:
-        _render_table(all_stocks_list, height=600)
-    else:
-        st.caption("No stocks for this filter.")

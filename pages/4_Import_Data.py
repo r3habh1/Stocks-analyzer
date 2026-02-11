@@ -9,10 +9,9 @@ st.set_page_config(page_title="Import Data", page_icon="📥", layout="wide")
 with st.sidebar:
     st.header("Navigation")
     st.page_link("app.py", label="Home", icon="🏠")
-    st.page_link("pages/1_Stock_Analysis.py", label="Stock Analysis", icon="🔍")
-    st.page_link("pages/2_Backtest.py", label="Backtest", icon="🔬")
-    st.page_link("pages/3_Import_Data.py", label="Import Data", icon="📥")
-    st.page_link("pages/4_Manual.py", label="Manual", icon="📖")
+    st.page_link("pages/2_Stock_Analysis.py", label="Stock Analysis", icon="🔍")
+    st.page_link("pages/3_Stock_Action_Sheet.py", label="Stock Sheet", icon="📋")
+    st.page_link("pages/4_Import_Data.py", label="Import Data", icon="📥")
     st.divider()
 
 st.title("📥 Import CSV Data")

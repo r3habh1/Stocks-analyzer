@@ -1,13 +1,65 @@
 """Signal detection — OI trend flips, sector rotation, PCR extremes,
-delivery spikes, multi-day streaks.  All built from the DataCache."""
+delivery spikes, multi-day streaks."""
 
 from __future__ import annotations
 from collections import defaultdict
+import pandas as pd
 from core.scorer import base_score, outrunner_conviction, BULLISH
 
 # ── OI Trend Flip Detection ────────────────────────────────
 
 BEARISH_TRENDS = {"NewShort", "LongCover"}
+
+
+def compute_sector_direction(now: dict, past: dict, prev: dict,
+                             chg_delta: float, agg_call_chg: float | None,
+                             agg_put_chg: float | None,
+                             threshold: float = 0.3) -> tuple[str, float]:
+    """Composite direction from delivery, volume, fut OI, change delta, change %,
+    call OI, put OI. Returns (Direction, score)."""
+    # Normalize each metric to -1..1 contribution
+    def _norm(v: float, pos_good: bool = True) -> float:
+        if v is None: return 0
+        # rough normalization: 1.5+ -> 1, 1.0 -> 0, 0.5 -> -0.5
+        if pos_good:
+            if v >= 1.5: return 1
+            if v >= 1.0: return (v - 1) * 2  # 0..1
+            if v >= 0.5: return -0.5
+            return -1
+        else:
+            return -_norm(v, True)
+
+    dlv_now = now.get("avg_dlv", 0) or 0
+    dlv_past = past.get("avg_dlv", dlv_now) or 0
+    dlv_delta = dlv_now - dlv_past
+    vol_now = now.get("avg_vol", 0) or 0
+    vol_past = past.get("avg_vol", vol_now) or 0
+    vol_delta = vol_now - vol_past
+    avg_chg = now.get("avg_chg", 0) or 0
+    oi_chg = now.get("avg_oi_chg", 0) or 0
+
+    score = 0.0
+    # Delivery: > 1.5 is good
+    score += _norm(dlv_now) * 0.2
+    score += (1 if dlv_delta > 0.1 else (-1 if dlv_delta < -0.1 else 0)) * 0.15
+    # Volume: > 1.5 is good
+    score += _norm(vol_now) * 0.2
+    score += (1 if vol_delta > 0.1 else (-1 if vol_delta < -0.1 else 0)) * 0.15
+    # Change %: positive is good
+    score += (1 if avg_chg > 1 else (-1 if avg_chg < -1 else 0)) * 0.2
+    # Chg delta: positive is good
+    score += (1 if chg_delta > 0.5 else (-1 if chg_delta < -0.5 else 0)) * 0.15
+    # Fut OI (avg_oi_chg): positive is good
+    score += (1 if oi_chg > 2 else (-1 if oi_chg < -2 else 0)) * 0.15
+    # Call OI chg: positive = bullish
+    if agg_call_chg is not None:
+        score += (1 if agg_call_chg > 2 else (-1 if agg_call_chg < -2 else 0)) * 0.1
+    # Put OI chg: negative = bullish (put unwinding)
+    if agg_put_chg is not None:
+        score += (-1 if agg_put_chg > 2 else (1 if agg_put_chg < -2 else 0)) * 0.1
+
+    direction = "Improving" if score > threshold else ("Declining" if score < -threshold else "Stable")
+    return direction, round(score, 2)
 
 
 def _pct_chg(curr: float, prev: float) -> float | None:
@@ -166,8 +218,7 @@ def sector_rotation(data: dict, dates: list[str], window: int = 5,
     rotations = []
     for sec, now in stats_now.items():
         past = stats_past.get(sec, {})
-        prev = stats_prev_day.get(sec, past)  # use prev day for OI chg when available
-        bull_delta = now["bull_pct"] - past.get("bull_pct", now["bull_pct"])
+        prev = stats_prev_day.get(sec, past)
         pcr_delta = now["avg_pcr"] - past.get("avg_pcr", now["avg_pcr"])
         chg_delta = now["avg_chg"] - past.get("avg_chg", 0)
 
@@ -178,14 +229,16 @@ def sector_rotation(data: dict, dates: list[str], window: int = 5,
         agg_call_chg = _pct_chg(now_call, past_call) if past_call else None
         agg_put_chg = _pct_chg(now_put, past_put) if past_put else None
 
+        direction, direction_score = compute_sector_direction(
+            now, past, prev, chg_delta, agg_call_chg, agg_put_chg
+        )
+
         rotations.append({
             "Sector": sec,
             "Stocks": now["count"],
             "stocks_list": sector_stocks.get(sec, []),
             "Agg Chg %": round(now["avg_chg"], 2),
             "Chg Δ": round(chg_delta, 2),
-            "Bull%": now["bull_pct"],
-            "Bull Δ": round(bull_delta, 1),
             "Vol(x)": round(now["avg_vol"], 2),
             "Dlv(x)": round(now["avg_dlv"], 2),
             "PCR": round(now["avg_pcr"], 2),
@@ -194,11 +247,52 @@ def sector_rotation(data: dict, dates: list[str], window: int = 5,
             "Agg Call OI Chg%": agg_call_chg,
             "Agg Put OI": int(now_put),
             "Agg Put OI Chg%": agg_put_chg,
-            "Direction": "Improving" if bull_delta > 10 else
-                         "Declining" if bull_delta < -10 else "Stable",
+            "Direction": direction,
+            "direction_score": direction_score,
         })
-    rotations.sort(key=lambda x: x["Bull Δ"], reverse=True)
+    rotations.sort(key=lambda x: (x["direction_score"], x["Agg Chg %"]), reverse=True)
     return rotations
+
+
+def sector_time_series(data: dict, dates: list[str],
+                       mcap_filter: str = "All") -> dict[str, pd.DataFrame]:
+    """Per-sector time series for charting. Returns {sector: DataFrame with date, close, volume_times, delivery_times, fut_oi, call_oi, put_oi, pcr, oi_change_pct, change_pct}."""
+    def _filter(date):
+        items = data.get(date, {}).values()
+        if mcap_filter != "All":
+            items = [s for s in items if s.get("mcap_category") == mcap_filter]
+        return list(items)
+
+    by_sector_date: dict[str, dict[str, list]] = defaultdict(lambda: defaultdict(list))
+    for dt in dates:
+        stocks = _filter(dt)
+        for s in stocks:
+            sec = s.get("sector", "?")
+            by_sector_date[sec][dt].append(s)
+
+    result = {}
+    for sec, date_stocks in by_sector_date.items():
+        rows = []
+        for dt in sorted(date_stocks.keys()):
+            stocks = date_stocks[dt]
+            if not stocks:
+                continue
+            n = len(stocks)
+            rows.append({
+                "date": dt,
+                "close": sum(s.get("close", 0) or 0 for s in stocks) / n,
+                "volume_times": sum(s.get("volume_times", 0) or 0 for s in stocks) / n,
+                "delivery_times": sum(s.get("delivery_times", 0) or 0 for s in stocks) / n,
+                "fut_oi": sum(s.get("cumulative_future_oi", 0) or 0 for s in stocks),
+                "call_oi": sum(s.get("cumulative_call_oi", 0) or 0 for s in stocks),
+                "put_oi": sum(s.get("cumulative_put_oi", 0) or 0 for s in stocks),
+                "pcr": sum(s.get("pcr", 0) or 0 for s in stocks) / n,
+                "oi_change_pct": sum(s.get("oi_change_pct", 0) or 0 for s in stocks) / n,
+                "change_pct": sum(s.get("change_pct", 0) or 0 for s in stocks) / n,
+            })
+        if rows:
+            result[sec] = pd.DataFrame(rows)
+    return result
 
 
 # ── PCR Extreme Alerts ──────────────────────────────────────
@@ -352,3 +446,63 @@ def daily_summary(data: dict, dates: list[str]) -> str:
         lines.append(f"{len(stk)} stock(s) on {3}+ day sweet-spot streak — persistent conviction.")
 
     return " ".join(lines)
+
+
+# ── Signal Convergence (for badges) ────────────────────────────────
+
+def signal_convergence(
+    data: dict,
+    dates: list[str],
+    view_date: str,
+) -> dict[str, list[str]]:
+    """Returns {symbol: [signal1, signal2, ...]} for stocks on view_date.
+    Signals: Flip, PCR, Dlv, Streak, CallPut."""
+    result: dict[str, list[str]] = {}
+    if not dates or view_date not in data:
+        return result
+
+    flips = {f["symbol"] for f in detect_trend_flips(data, dates)}
+    ext = pcr_extremes(data, view_date)
+    pcr_syms = {e["symbol"] for e in ext["low_pcr"] + ext["high_pcr"]}
+    spikes = {s["symbol"] for s in delivery_spikes(data, view_date, 2.0)}
+    streaks = {s["symbol"] for s in score_streaks(data, dates, 3)}
+
+    prev_date = dates[-2] if len(dates) >= 2 else None
+    prev_data = data.get(prev_date, {}) if prev_date else {}
+
+    for sym, s in data.get(view_date, {}).items():
+        sigs = []
+        if sym in flips:
+            sigs.append("Flip")
+        if sym in pcr_syms:
+            sigs.append("PCR")
+        if sym in spikes:
+            sigs.append("Dlv")
+        if sym in streaks:
+            sigs.append("Streak")
+        # Call/Put divergence
+        cp = call_put_divergence(s, prev_data.get(sym))
+        if cp == "bullish":
+            sigs.append("CallPut")
+        if sigs:
+            result[sym] = sigs
+    return result
+
+
+def call_put_divergence(stock: dict, prev_stock: dict | None) -> str | None:
+    """Bullish when call OI up + put OI down. Bearish when call down + put up."""
+    if not prev_stock:
+        return None
+    prev_call = prev_stock.get("cumulative_call_oi") or 0
+    prev_put = prev_stock.get("cumulative_put_oi") or 0
+    curr_call = stock.get("cumulative_call_oi") or 0
+    curr_put = stock.get("cumulative_put_oi") or 0
+    if prev_call <= 0 or prev_put <= 0:
+        return None
+    call_chg = (curr_call - prev_call) / prev_call
+    put_chg = (curr_put - prev_put) / prev_put
+    if call_chg > 0.02 and put_chg < -0.02:
+        return "bullish"
+    if call_chg < -0.02 and put_chg > 0.02:
+        return "bearish"
+    return None
