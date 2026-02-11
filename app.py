@@ -255,8 +255,9 @@ if top7:
         sigs = " ".join(f"[{s}]" for s in p.get("signals", [])) or "—"
         chg = p.get("change_pct")
         chg_str = f"{chg:+.1f}%" if chg is not None else "—"
+        tv_url = f"https://www.tradingview.com/chart/?symbol=NSE%3A{sym.upper()}"
         st.markdown(
-            f"**#{i}** [{sym}](/Stock_Analysis?symbol={sym}) — Conv: {p['conviction']} | Score: {p['score']} | Chg: {chg_str} | {sigs}"
+            f"**#{i}** [{sym}](/Stock_Analysis?symbol={sym}) — Conv: {p['conviction']} | Score: {p['score']} | Chg: {chg_str} | {sigs} | [TradingView]({tv_url})"
         )
 else:
     st.caption("No picks in sweet spot (score 20–34) for this filter.")
